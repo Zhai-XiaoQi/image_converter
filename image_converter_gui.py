@@ -1089,6 +1089,7 @@ class ImageEditorWindow:
         self.crop_size_text = StringVar(value=f"当前裁剪：{self.original.width} x {self.original.height}")
         self.keep_ratio = BooleanVar(value=True)
         self.preview_ref: ImageTk.PhotoImage | None = None
+        self.mask_ref: ImageTk.PhotoImage | None = None
         self.preview_size = (1, 1)
         self.canvas_size = (1, 1)
         self.scale = 1.0
@@ -1286,11 +1287,11 @@ class ImageEditorWindow:
         self.canvas.delete("overlay")
         x1, y1, x2, y2 = self.output_box
         cw, ch = self.canvas_size
-        mask_options = {"fill": "#000000", "stipple": "gray50", "outline": "", "tags": "overlay"}
-        mask_areas = [(0, 0, cw, y1), (0, y2, cw, ch), (0, y1, x1, y2), (x2, y1, cw, y2)]
-        for area in mask_areas:
-            self.canvas.create_rectangle(*area, **mask_options)
-            self.canvas.create_rectangle(*area, **mask_options)
+        mask = Image.new("RGBA", (cw, ch), (0, 0, 0, 215))
+        clear = Image.new("RGBA", (max(1, x2 - x1), max(1, y2 - y1)), (0, 0, 0, 0))
+        mask.paste(clear, (x1, y1))
+        self.mask_ref = ImageTk.PhotoImage(mask)
+        self.canvas.create_image(0, 0, image=self.mask_ref, anchor="nw", tags="overlay")
         self.canvas.create_rectangle(x1, y1, x2, y2, outline="#00d084", width=2, tags="overlay")
         for hx, hy in self._handles():
             self.canvas.create_rectangle(hx - self.HANDLE // 2, hy - self.HANDLE // 2, hx + self.HANDLE // 2, hy + self.HANDLE // 2, fill="#00d084", outline="#00d084", tags="overlay")
@@ -1645,6 +1646,7 @@ class EmbeddedImageEditor(ImageEditorWindow):
         self.crop_size_text = StringVar(value=f"当前裁剪：{self.original.width} x {self.original.height}")
         self.keep_ratio = BooleanVar(value=True)
         self.preview_ref: ImageTk.PhotoImage | None = None
+        self.mask_ref: ImageTk.PhotoImage | None = None
         self.preview_size = (1, 1)
         self.canvas_size = (1, 1)
         self.scale = 1.0
