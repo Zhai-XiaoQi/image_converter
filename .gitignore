@@ -11,6 +11,7 @@ dist/
 *.zip
 *.7z
 *.rar
+version_backups/
 
 # Logs and reports generated while using the tool
 conversion_report.txt

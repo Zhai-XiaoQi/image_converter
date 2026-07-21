@@ -30,7 +30,7 @@ from tkinter import (
 from tkinter import font as tkfont
 from tkinter import ttk
 
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageDraw, ImageGrab, ImageTk
 
 
 SUPPORTED_INPUTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
@@ -128,9 +128,8 @@ class ImageConverterApp:
         top.pack(fill="x")
         mode_row = Frame(top)
         mode_row.pack(fill="x", padx=10, pady=(6, 2))
-        Radiobutton(mode_row, text="选择文件夹", variable=self.mode, value="folder").pack(side="left")
-        Radiobutton(mode_row, text="选择多个文件", variable=self.mode, value="files").pack(side="left", padx=(18, 0))
-        Button(mode_row, text="选择...", command=self.choose_input, width=12).pack(side="left", padx=(18, 0))
+        Button(mode_row, text="选择文件夹", command=self.choose_folder_input, width=14).pack(side="left")
+        Button(mode_row, text="选择文件", command=self.choose_files_input, width=14).pack(side="left", padx=(8, 0))
         Button(mode_row, text="扫描预览", command=self.scan_jobs, width=12).pack(side="left", padx=(8, 0))
         input_row = Frame(top)
         input_row.pack(fill="x", padx=10, pady=(2, 6))
@@ -150,17 +149,20 @@ class ImageConverterApp:
         row1.pack(fill="x", padx=10, pady=(6, 4))
         Label(row1, text="输出格式").pack(side="left")
         for label, value in [("JPG", "jpg"), ("PNG", "png"), ("WEBP", "webp")]:
-            Radiobutton(row1, text=label, variable=self.output_format, value=value, command=self.scan_jobs).pack(side="left", padx=(10, 0))
+            Radiobutton(row1, text=label, variable=self.output_format, value=value, command=self._on_output_format_change).pack(side="left", padx=(10, 0))
         Label(row1, text="质量").pack(side="left", padx=(24, 4))
         ttk.Spinbox(row1, from_=1, to=100, textvariable=self.quality, width=6).pack(side="left")
-        Checkbutton(row1, text="仅 JPG 渐进式", variable=self.progressive_jpg).pack(side="left", padx=(18, 0))
+        self.progressive_check = Checkbutton(row1, text="仅 JPG 渐进式", variable=self.progressive_jpg)
+        self.progressive_check.pack(side="left", padx=(18, 0))
         Checkbutton(row1, text="保留目录结构", variable=self.preserve_structure, command=self.scan_jobs).pack(side="left", padx=(18, 0))
         row2 = Frame(opts)
         row2.pack(fill="x", padx=10, pady=(4, 6))
-        Label(row2, text="透明背景").pack(side="left")
-        Entry(row2, textvariable=self.alpha_bg, width=10).pack(side="left", padx=(6, 0))
-        Checkbutton(row2, text="覆盖已存在文件", variable=self.overwrite).pack(side="left", padx=(20, 0))
-        Checkbutton(row2, text="成功后删除原图", variable=self.delete_originals).pack(side="left", padx=(20, 0))
+        self.alpha_label = Label(row2, text="转 JPG 时背景色")
+        self.alpha_label.pack(side="left")
+        self.alpha_entry = Entry(row2, textvariable=self.alpha_bg, width=10)
+        self.alpha_entry.pack(side="left", padx=(6, 0))
+        Checkbutton(row2, text="覆盖已存在文件", variable=self.overwrite, fg="#9a6400").pack(side="left", padx=(20, 0))
+        Checkbutton(row2, text="成功后删除原图", variable=self.delete_originals, fg="#b42318", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(20, 0))
 
         preview = LabelFrame(main, text="预览", font=module_font)
         preview.pack(fill="both", expand=True, pady=(8, 0))
@@ -215,28 +217,78 @@ class ImageConverterApp:
         self.progress.pack(side="left", fill="x", expand=True)
         Button(bottom, text="开始转换", command=self.start_convert, width=14).pack(side="left", padx=(10, 0))
         Label(main, textvariable=self.status_text, anchor="w").pack(fill="x", pady=(8, 0))
+        for drop_widget in (preview, self.tree, self.grid_canvas):
+            self._enable_batch_drop(drop_widget)
         self._build_single_editor_tab(module_font)
+        self._bind_shortcuts()
+
+    def _bind_shortcuts(self) -> None:
+        self.root.bind("<Return>", self._shortcut_enter)
+        self.root.bind("<Escape>", self._shortcut_escape)
+        self.root.bind("<Control-s>", self._shortcut_save_single)
+        self.root.bind("<Control-S>", self._shortcut_save_single)
+        self.root.bind("<Key-r>", self._shortcut_reset_single)
+        self.root.bind("<Key-R>", self._shortcut_reset_single)
+
+    def _shortcut_enter(self, _event) -> str | None:
+        if self.notebook.index("current") == 0:
+            self.start_convert()
+            return "break"
+        return None
+
+    def _shortcut_escape(self, _event) -> str:
+        self._hide_hover_preview()
+        return "break"
+
+    def _shortcut_save_single(self, _event) -> str | None:
+        if self.notebook.index("current") == 1 and self.single_editor:
+            self.single_editor._save_copy_auto()
+            return "break"
+        return None
+
+    def _shortcut_reset_single(self, _event) -> str | None:
+        if self.notebook.index("current") == 1 and self.single_editor:
+            self.single_editor._reset_defaults()
+            return "break"
+        return None
 
     def choose_input(self) -> None:
-        if self.mode.get() == "folder":
-            folder = filedialog.askdirectory(title="选择要转换的文件夹")
-            if folder:
-                self.input_paths = [Path(folder)]
-                self.input_text.set(folder)
-                if not self.output_text.get():
-                    self.output_text.set(str(Path(folder).with_name(f"{Path(folder).name}_converted_images")))
-                self.scan_jobs()
+        if self.mode.get() == "files":
+            self.choose_files_input()
         else:
-            files = filedialog.askopenfilenames(
-                title="选择图片",
-                filetypes=[("Image files", "*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff"), ("All files", "*.*")],
-            )
-            if files:
-                self.input_paths = [Path(p) for p in files]
-                self.input_text.set(f"已选择 {len(files)} 个文件")
-                if not self.output_text.get():
-                    self.output_text.set(str(self.input_paths[0].parent / "converted_images"))
-                self.scan_jobs()
+            self.choose_folder_input()
+
+    def choose_folder_input(self) -> None:
+        folder = filedialog.askdirectory(title="选择要转换的文件夹")
+        if folder:
+            self.mode.set("folder")
+            self.input_paths = [Path(folder)]
+            self.input_text.set(folder)
+            if not self.output_text.get():
+                self.output_text.set(str(Path(folder).with_name(f"{Path(folder).name}_converted_images")))
+            self.scan_jobs()
+
+    def choose_files_input(self) -> None:
+        files = filedialog.askopenfilenames(
+            title="选择图片",
+            filetypes=[("Image files", "*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff"), ("All files", "*.*")],
+        )
+        if files:
+            self.mode.set("files")
+            self.input_paths = [Path(p) for p in files]
+            self.input_text.set(f"已选择 {len(files)} 个文件")
+            if not self.output_text.get():
+                self.output_text.set(str(self.input_paths[0].parent / "converted_images"))
+            self.scan_jobs()
+
+    def _on_output_format_change(self) -> None:
+        is_jpg = self.output_format.get() == "jpg"
+        if not is_jpg:
+            self.progressive_jpg.set(False)
+        state = "normal" if is_jpg else "disabled"
+        for widget in (self.progressive_check, self.alpha_label, self.alpha_entry):
+            widget.config(state=state)
+        self.scan_jobs()
 
     def choose_output(self) -> None:
         folder = filedialog.askdirectory(title="选择输出文件夹")
@@ -422,8 +474,8 @@ class ImageConverterApp:
         top = Frame(card, bg="#f5f5f5")
         top.pack(fill="x")
         Checkbutton(top, variable=var, command=lambda i=idx: self._set_job_selected(i, self.card_vars[i].get()), bg="#f5f5f5", activebackground="#eaf3ff").pack(side="left")
-        Button(top, text="编辑", command=lambda i=idx: self.open_editor(i), width=6).pack(side="right")
-        Button(top, text="单图", command=lambda i=idx: self.load_single_image(self.jobs[i].source), width=6).pack(side="right", padx=(0, 6))
+        Button(top, text="大图预览", command=lambda i=idx: self.open_large_preview(i), width=8).pack(side="right")
+        Button(top, text="编辑", command=lambda i=idx: self.load_single_image(self.jobs[i].source), width=6).pack(side="right", padx=(0, 6))
         thumb = self._get_thumbnail(job.source, (176, 126))
         image_label = Label(card, image=thumb, width=184, height=132, bg="#f7f7f4")
         image_label.image = thumb  # type: ignore[attr-defined]
@@ -435,7 +487,7 @@ class ImageConverterApp:
         card.bind("<Button-1>", lambda _e, i=idx: self._select_job_in_tree(i))
         self._bind_card_hover(card)
         image_label.bind("<Button-1>", lambda _e, i=idx: self._select_job_in_tree(i))
-        image_label.bind("<Double-Button-1>", lambda _e, i=idx: self.open_editor(i))
+        image_label.bind("<Double-Button-1>", lambda _e, i=idx: self.load_single_image(self.jobs[i].source))
         image_label.bind("<Enter>", lambda e, p=job.source: self._schedule_hover(p, e.x_root, e.y_root))
         image_label.bind("<Motion>", lambda e, p=job.source: self._schedule_hover(p, e.x_root, e.y_root))
         image_label.bind("<Leave>", lambda _e: self._hide_hover_preview())
@@ -696,6 +748,7 @@ class ImageConverterApp:
     def _convert_worker(self, selected_jobs: list[ConvertJob]) -> None:
         ok = failed = skipped = 0
         unselected = len(self.jobs) - len(selected_jobs)
+        failures: list[str] = []
         report = [
             f"Image conversion report: {datetime.now():%Y-%m-%d %H:%M:%S}",
             f"Output format: {self.output_format.get()}",
@@ -717,20 +770,24 @@ class ImageConverterApp:
                     report.append(f"[OK] {job.source} -> {job.target}")
             except Exception as exc:  # noqa: BLE001
                 failed += 1
-                report.append(f"[FAIL] {job.source} -> {job.target} ({exc})")
+                message = f"{job.source} -> {job.target} ({exc})"
+                failures.append(message)
+                report.append(f"[FAIL] {message}")
             self.events.put(("progress", (index, len(selected_jobs), ok, failed, skipped)))
         report_path = Path(self.output_text.get().strip()) / "conversion_report.txt"
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text("\n".join(report), encoding="utf-8")
-        self.events.put(("done", (ok, failed, skipped, unselected, report_path)))
+        self.events.put(("done", (ok, failed, skipped, unselected, report_path, failures)))
 
     def _convert_one(self, source: Path, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         out_format = self.output_format.get()
         bg = self._parse_color(self.alpha_bg.get())
         with Image.open(source) as im:
-            if out_format in {"jpg", "webp"}:
+            if out_format == "jpg":
                 im = self._flatten_alpha(im, bg)
+            elif out_format == "webp":
+                im = im.convert("RGBA") if im.mode in {"RGBA", "LA", "P"} else im.convert("RGB")
             elif out_format == "png":
                 im = im.convert("RGBA") if im.mode in {"RGBA", "LA", "P"} else im.convert("RGB")
             if out_format == "jpg":
@@ -760,11 +817,30 @@ class ImageConverterApp:
             return (255, 255, 255)
         if value.lower() in {"black", "000000"}:
             return (0, 0, 0)
-        raise ValueError("透明背景颜色请使用 #ffffff 这种格式")
+        raise ValueError("背景填充色请使用 #ffffff 这种格式")
 
     def open_editor(self, job_index: int) -> None:
         if 0 <= job_index < len(self.jobs):
             ImageEditorWindow(self, self.jobs[job_index].source)
+
+    def open_large_preview(self, job_index: int) -> None:
+        if not (0 <= job_index < len(self.jobs)):
+            return
+        source = self.jobs[job_index].source
+        try:
+            with Image.open(source) as im:
+                im = im.convert("RGB")
+                im.thumbnail((1100, 760), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(im)
+        except Exception as exc:
+            messagebox.showerror("无法预览", f"图片读取失败：\n{source}\n\n{exc}")
+            return
+        win = Toplevel(self.root)
+        win.title(f"大图预览 - {source.name}")
+        win.geometry("1160x840")
+        Label(win, image=photo, bg="#222").pack(fill="both", expand=True, padx=12, pady=12)
+        Label(win, text=str(source), anchor="w").pack(fill="x", padx=12, pady=(0, 12))
+        win.image_ref = photo  # type: ignore[attr-defined]
 
     def _build_single_editor_tab(self, module_font) -> None:
         page = Frame(self.notebook, padx=12, pady=12)
@@ -777,7 +853,7 @@ class ImageConverterApp:
         row.pack(fill="x", padx=10, pady=6)
         self.single_image_text = StringVar(value="未选择图片")
         Button(row, text="选择图片", command=self.choose_single_image, width=12).pack(side="left")
-        Button(row, text="粘贴路径", command=self.load_single_from_clipboard, width=10).pack(side="left", padx=(8, 0))
+        Button(row, text="粘贴路径/图片", command=self.load_single_from_clipboard, width=14).pack(side="left", padx=(8, 0))
         Label(row, textvariable=self.single_image_text, anchor="w").pack(side="left", fill="x", expand=True, padx=(10, 0))
 
         single_opts = LabelFrame(top_area, text="单图转换", font=module_font)
@@ -786,22 +862,24 @@ class ImageConverterApp:
         opt_row.pack(fill="x", padx=10, pady=(6, 3))
         Label(opt_row, text="格式").pack(side="left")
         for label, value in [("JPG", "jpg"), ("PNG", "png"), ("WEBP", "webp")]:
-            Radiobutton(opt_row, text=label, variable=self.single_output_format, value=value).pack(side="left", padx=(8, 0))
+            Radiobutton(opt_row, text=label, variable=self.single_output_format, value=value, command=self._on_single_output_format_change).pack(side="left", padx=(8, 0))
         Label(opt_row, text="质量").pack(side="left", padx=(18, 4))
         ttk.Spinbox(opt_row, from_=1, to=100, textvariable=self.single_quality, width=5).pack(side="left")
-        Checkbutton(opt_row, text="仅 JPG 渐进式", variable=self.single_progressive_jpg).pack(side="left", padx=(12, 0))
+        self.single_progressive_check = Checkbutton(opt_row, text="仅 JPG 渐进式", variable=self.single_progressive_jpg)
+        self.single_progressive_check.pack(side="left", padx=(12, 0))
         opt_row2 = Frame(single_opts)
         opt_row2.pack(fill="x", padx=10, pady=(3, 6))
-        Label(opt_row2, text="透明背景").pack(side="left")
-        Entry(opt_row2, textvariable=self.single_alpha_bg, width=10).pack(side="left", padx=(6, 12))
-        Button(opt_row2, text="保存转换副本", command=self.save_single_converted, width=14).pack(side="left")
-        Button(opt_row2, text="打开结果", command=self.open_single_result_dir, width=12).pack(side="left", padx=(8, 0))
+        self.single_alpha_label = Label(opt_row2, text="转 JPG 时背景色")
+        self.single_alpha_label.pack(side="left")
+        self.single_alpha_entry = Entry(opt_row2, textvariable=self.single_alpha_bg, width=10)
+        self.single_alpha_entry.pack(side="left", padx=(6, 12))
 
         self.single_editor_host = Frame(page)
         self.single_editor_host.pack(fill="both", expand=True, pady=(10, 0))
         self.single_editor = None
         self._show_empty_single_canvas()
         self._enable_file_drop(self.single_editor_host, self.load_single_image)
+        self._on_single_output_format_change()
 
     def _show_empty_single_canvas(self) -> None:
         for child in self.single_editor_host.winfo_children():
@@ -821,15 +899,33 @@ class ImageConverterApp:
 
     def load_single_from_clipboard(self) -> None:
         try:
+            image = ImageGrab.grabclipboard()
+        except Exception:
+            image = None
+        if isinstance(image, Image.Image):
+            clip_dir = Path(os.environ.get("TEMP", "."))
+            path = clip_dir / f"image_converter_clipboard_{datetime.now():%Y%m%d_%H%M%S}.png"
+            image.save(path, format="PNG")
+            self.load_single_image(path)
+            return
+        try:
             value = self.root.clipboard_get().strip().strip('"')
         except Exception:
-            messagebox.showwarning("没有路径", "剪贴板里没有可读取的图片路径。")
+            messagebox.showwarning("没有可读取内容", "剪贴板里没有图片，也没有可读取的图片路径。")
             return
         path = Path(value)
         if path.is_file() and self._is_supported_input(path):
             self.load_single_image(path)
         else:
             messagebox.showwarning("路径不可用", "剪贴板内容不是可支持的图片文件路径。")
+
+    def _on_single_output_format_change(self) -> None:
+        is_jpg = self.single_output_format.get() == "jpg"
+        if not is_jpg:
+            self.single_progressive_jpg.set(False)
+        state = "normal" if is_jpg else "disabled"
+        for widget in (self.single_progressive_check, self.single_alpha_label, self.single_alpha_entry):
+            widget.config(state=state)
 
     def _enable_file_drop(self, widget, callback) -> None:
         try:
@@ -839,6 +935,31 @@ class ImageConverterApp:
             self.root.tk.call("bind", widget._w, "<<Drop:DND_Files>>", f"{command} %D")
         except Exception:
             widget.bind("<Control-v>", lambda _e: self.load_single_from_clipboard(), add="+")
+
+    def _enable_batch_drop(self, widget) -> None:
+        try:
+            self.root.tk.call("package", "require", "tkdnd")
+            self.root.tk.call("tkdnd::drop_target", "register", widget._w, "DND_Files")
+            command = widget.register(lambda data: self.load_batch_drop_path(Path(str(data).strip("{}").strip())))
+            self.root.tk.call("bind", widget._w, "<<Drop:DND_Files>>", f"{command} %D")
+        except Exception:
+            return
+
+    def load_batch_drop_path(self, path: Path) -> None:
+        if path.is_dir():
+            self.mode.set("folder")
+            self.input_paths = [path]
+            self.input_text.set(str(path))
+            if not self.output_text.get():
+                self.output_text.set(str(path.with_name(f"{path.name}_converted_images")))
+            self.scan_jobs()
+        elif path.is_file() and self._is_supported_input(path):
+            self.mode.set("files")
+            self.input_paths = [path]
+            self.input_text.set(str(path))
+            if not self.output_text.get():
+                self.output_text.set(str(path.parent / "converted_images"))
+            self.scan_jobs()
 
     def load_single_image(self, path: Path) -> None:
         for child in self.single_editor_host.winfo_children():
@@ -884,9 +1005,15 @@ class ImageConverterApp:
                     self.progress.config(value=index)
                     self.status_text.set(f"处理中 {index}/{total}，成功 {ok}，失败 {failed}，跳过 {skipped}")
                 elif kind == "done":
-                    ok, failed, skipped, unselected, report_path = payload  # type: ignore[misc]
+                    ok, failed, skipped, unselected, report_path, failures = payload  # type: ignore[misc]
                     self.status_text.set(f"完成：成功 {ok}，失败 {failed}，跳过 {skipped}，未选 {unselected}。报告：{report_path}")
-                    messagebox.showinfo("转换完成", f"成功 {ok}\n失败 {failed}\n跳过 {skipped}\n未选 {unselected}\n\n报告：{report_path}")
+                    summary = f"成功 {ok}\n失败 {failed}\n跳过 {skipped}\n未选 {unselected}\n\n报告：{report_path}"
+                    if failures:
+                        shown = "\n".join(str(item) for item in failures[:8])
+                        more = "" if len(failures) <= 8 else f"\n... 还有 {len(failures) - 8} 条，详见报告。"
+                        messagebox.showwarning("转换完成：存在失败项", f"{summary}\n\n失败列表：\n{shown}{more}")
+                    else:
+                        messagebox.showinfo("转换完成", summary)
         except queue.Empty:
             pass
         self.root.after(120, self._drain_events)
@@ -922,6 +1049,7 @@ class ImageEditorWindow:
         self.resize_after_id: str | None = None
         self.undo_stack: list[dict[str, object]] = []
         self.redo_stack: list[dict[str, object]] = []
+        self.last_saved_path: Path | None = None
 
         self._build_ui()
         self.win.after(80, self._reset_view)
@@ -971,8 +1099,9 @@ class ImageEditorWindow:
         bottom = Frame(self.win, padx=10, pady=8)
         bottom.pack(fill="x")
         Label(bottom, text="拖四边/四角调输出尺寸；框内拖图片调位置；滚轮缩放；靠近画布边缘自动吸附。").pack(side="left")
-        Button(bottom, text="覆盖原图", command=self._overwrite_original).pack(side="right")
-        Button(bottom, text="保存副本", command=self._save_copy_auto).pack(side="right", padx=(8, 8))
+        Button(bottom, text="打开结果", command=self._open_result_dir).pack(side="right")
+        Button(bottom, text="覆盖原图", command=self._overwrite_original).pack(side="right", padx=(8, 0))
+        Button(bottom, text="保存副本", command=self._save_copy_auto).pack(side="right", padx=(8, 0))
 
     def _reset_view(self) -> None:
         self.win.update_idletasks()
@@ -1313,10 +1442,15 @@ class ImageEditorWindow:
         if messagebox.askyesno("确认覆盖", f"确定覆盖原图吗？\n{self.source}"):
             self._save_image(self.source, close=True)
 
+    def _open_result_dir(self) -> None:
+        target = self.last_saved_path or self.source
+        folder = target.parent if target.is_file() else target
+        os.startfile(folder)  # type: ignore[attr-defined]
+
     def _save_image(self, path: Path, close: bool) -> None:
         im = self._edited_image()
         ext = path.suffix.lower()
-        if ext in {".jpg", ".jpeg", ".webp"}:
+        if ext in {".jpg", ".jpeg"}:
             im = ImageConverterApp._flatten_alpha(im, (255, 255, 255))
         path.parent.mkdir(parents=True, exist_ok=True)
         if ext in {".jpg", ".jpeg"}:
@@ -1325,6 +1459,7 @@ class ImageEditorWindow:
             im.save(path, format="WEBP", quality=92, method=6)
         else:
             im.save(path)
+        self.last_saved_path = path
         self.app.refresh_after_edit()
         if close:
             self.win.destroy()
@@ -1333,8 +1468,10 @@ class ImageEditorWindow:
         ext = ".jpg" if out_format == "jpg" else f".{out_format}"
         path = self._next_copy_path_with_suffix(ext)
         im = self._edited_image()
-        if out_format in {"jpg", "webp"}:
+        if out_format == "jpg":
             im = ImageConverterApp._flatten_alpha(im, bg)
+        elif out_format == "webp":
+            im = im.convert("RGBA") if im.mode in {"RGBA", "LA", "P"} else im.convert("RGB")
         elif out_format == "png":
             im = im.convert("RGBA") if im.mode in {"RGBA", "LA", "P"} else im.convert("RGB")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1346,6 +1483,7 @@ class ImageEditorWindow:
             im.save(path, format="PNG", optimize=True)
         else:
             raise ValueError(f"Unsupported output format: {out_format}")
+        self.last_saved_path = path
         self.app.refresh_after_edit()
         return path
 
@@ -1375,6 +1513,7 @@ class EmbeddedImageEditor(ImageEditorWindow):
         self.resize_after_id: str | None = None
         self.undo_stack: list[dict[str, object]] = []
         self.redo_stack: list[dict[str, object]] = []
+        self.last_saved_path: Path | None = None
 
         self._build_ui()
         self.win.after(80, self._reset_view)
@@ -1383,8 +1522,14 @@ class EmbeddedImageEditor(ImageEditorWindow):
         return
 
     def _save_copy_auto(self) -> None:
-        self._save_image(self._next_copy_path(), close=False)
-        messagebox.showinfo("已保存", "副本已保存到原图旁边。")
+        path = self.save_converted_copy(
+            self.app.single_output_format.get(),
+            int(self.app.single_quality.get()),
+            bool(self.app.single_progressive_jpg.get()),
+            self.app._parse_color(self.app.single_alpha_bg.get()),
+        )
+        self.app.single_last_result = path
+        messagebox.showinfo("已保存", f"副本已保存到原图旁边：\n{path}")
 
     def _overwrite_original(self) -> None:
         if messagebox.askyesno("确认覆盖", f"确定要覆盖原图吗？\n{self.source}"):
