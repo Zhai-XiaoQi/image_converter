@@ -215,11 +215,22 @@ class ImageConverterApp:
         bottom.pack(fill="x", pady=(10, 0))
         self.progress = ttk.Progressbar(bottom, mode="determinate")
         self.progress.pack(side="left", fill="x", expand=True)
-        Button(bottom, text="开始转换", command=self.start_convert, width=14).pack(side="left", padx=(10, 0))
+        Button(
+            bottom,
+            text="开始转换",
+            command=self.start_convert,
+            width=18,
+            bg="#0b5cad",
+            fg="white",
+            activebackground="#084a8d",
+            activeforeground="white",
+            font=("Microsoft YaHei UI", 10, "bold"),
+        ).pack(side="left", padx=(10, 0), ipady=2)
         Label(main, textvariable=self.status_text, anchor="w").pack(fill="x", pady=(8, 0))
         for drop_widget in (preview, self.tree, self.grid_canvas):
             self._enable_batch_drop(drop_widget)
         self._build_single_editor_tab(module_font)
+        self._on_output_format_change()
         self._bind_shortcuts()
 
     def _bind_shortcuts(self) -> None:
@@ -474,8 +485,10 @@ class ImageConverterApp:
         top = Frame(card, bg="#f5f5f5")
         top.pack(fill="x")
         Checkbutton(top, variable=var, command=lambda i=idx: self._set_job_selected(i, self.card_vars[i].get()), bg="#f5f5f5", activebackground="#eaf3ff").pack(side="left")
-        Button(top, text="大图预览", command=lambda i=idx: self.open_large_preview(i), width=8).pack(side="right")
-        Button(top, text="编辑", command=lambda i=idx: self.load_single_image(self.jobs[i].source), width=6).pack(side="right", padx=(0, 6))
+        actions = Frame(top, bg="#f5f5f5")
+        Button(actions, text="大图预览", command=lambda i=idx: self.open_large_preview(i), width=8).pack(side="right")
+        Button(actions, text="编辑", command=lambda i=idx: self.load_single_image(self.jobs[i].source), width=6).pack(side="right", padx=(0, 6))
+        card.action_frame = actions  # type: ignore[attr-defined]
         thumb = self._get_thumbnail(job.source, (176, 126))
         image_label = Label(card, image=thumb, width=184, height=132, bg="#f7f7f4")
         image_label.image = thumb  # type: ignore[attr-defined]
@@ -514,9 +527,21 @@ class ImageConverterApp:
         def enter(_event=None) -> None:
             card.configure(bg="#eaf3ff")
             apply_bg(card, "#eaf3ff")
+            action_frame = getattr(card, "action_frame", None)
+            if action_frame and not action_frame.winfo_ismapped():
+                action_frame.pack(side="right")
 
         def leave(_event=None) -> None:
-            card.after(35, lambda: None if pointer_inside() else (card.configure(bg="#f5f5f5"), apply_bg(card, "#f5f5f5")))
+            def reset_if_outside() -> None:
+                if pointer_inside():
+                    return
+                action_frame = getattr(card, "action_frame", None)
+                if action_frame:
+                    action_frame.pack_forget()
+                card.configure(bg="#f5f5f5")
+                apply_bg(card, "#f5f5f5")
+
+            card.after(60, reset_if_outside)
 
         for widget in [card, *card.winfo_children()]:
             widget.bind("<Enter>", enter, add="+")
@@ -1034,6 +1059,7 @@ class ImageEditorWindow:
 
         self.width_var = IntVar(value=self.original.width)
         self.height_var = IntVar(value=self.original.height)
+        self.crop_size_text = StringVar(value=f"当前裁剪：{self.original.width} x {self.original.height}")
         self.keep_ratio = BooleanVar(value=True)
         self.preview_ref: ImageTk.PhotoImage | None = None
         self.preview_size = (1, 1)
@@ -1066,6 +1092,7 @@ class ImageEditorWindow:
         top = Frame(self.win, padx=10, pady=8)
         top.pack(fill="x")
         Label(top, text=f"原始尺寸：{self.original.width} x {self.original.height}").pack(side="left")
+        Label(top, textvariable=self.crop_size_text, fg="#0b5cad", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(18, 0))
         Label(top, text="宽").pack(side="left", padx=(20, 4))
         width_entry = Entry(top, textvariable=self.width_var, width=8)
         width_entry.pack(side="left")
@@ -1100,8 +1127,25 @@ class ImageEditorWindow:
         bottom.pack(fill="x")
         Label(bottom, text="拖四边/四角调输出尺寸；框内拖图片调位置；滚轮缩放；靠近画布边缘自动吸附。").pack(side="left")
         Button(bottom, text="打开结果", command=self._open_result_dir).pack(side="right")
-        Button(bottom, text="覆盖原图", command=self._overwrite_original).pack(side="right", padx=(8, 0))
-        Button(bottom, text="保存副本", command=self._save_copy_auto).pack(side="right", padx=(8, 0))
+        Button(
+            bottom,
+            text="覆盖原图",
+            command=self._overwrite_original,
+            fg="#b42318",
+            activeforeground="#b42318",
+            width=10,
+        ).pack(side="right", padx=(8, 0))
+        Button(
+            bottom,
+            text="保存副本",
+            command=self._save_copy_auto,
+            width=12,
+            bg="#0b5cad",
+            fg="white",
+            activebackground="#084a8d",
+            activeforeground="white",
+            font=("Microsoft YaHei UI", 9, "bold"),
+        ).pack(side="right", padx=(8, 0), ipady=1)
 
     def _reset_view(self) -> None:
         self.win.update_idletasks()
@@ -1178,6 +1222,15 @@ class ImageEditorWindow:
         self.canvas.create_rectangle(x1, y1, x2, y2, outline="#00d084", width=2, tags="overlay")
         for hx, hy in self._handles():
             self.canvas.create_rectangle(hx - self.HANDLE // 2, hy - self.HANDLE // 2, hx + self.HANDLE // 2, hy + self.HANDLE // 2, fill="#00d084", outline="#00d084", tags="overlay")
+        self._update_crop_size_label()
+
+    def _update_crop_size_label(self) -> None:
+        try:
+            width = max(1, int(self.width_var.get()))
+            height = max(1, int(self.height_var.get()))
+        except Exception:
+            width, height = self.original.width, self.original.height
+        self.crop_size_text.set(f"当前裁剪：{width} x {height}")
 
     def _handles(self) -> list[tuple[int, int]]:
         x1, y1, x2, y2 = self.output_box
@@ -1374,6 +1427,7 @@ class ImageEditorWindow:
         x1, y1, x2, y2 = self.output_box
         self.width_var.set(max(1, int((x2 - x1) / self.scale)))
         self.height_var.set(max(1, int((y2 - y1) / self.scale)))
+        self._update_crop_size_label()
 
     def _sync_box_from_size(self, changed: str) -> None:
         self._push_history()
@@ -1392,6 +1446,7 @@ class ImageEditorWindow:
         self.output_box = [cx - bw // 2, cy - bh // 2, cx + bw // 2, cy + bh // 2]
         self._clamp_box()
         self._draw_overlay()
+        self._update_crop_size_label()
 
     def _edited_image(self) -> Image.Image:
         x1, y1, x2, y2 = self.output_box
@@ -1498,6 +1553,7 @@ class EmbeddedImageEditor(ImageEditorWindow):
 
         self.width_var = IntVar(value=self.original.width)
         self.height_var = IntVar(value=self.original.height)
+        self.crop_size_text = StringVar(value=f"当前裁剪：{self.original.width} x {self.original.height}")
         self.keep_ratio = BooleanVar(value=True)
         self.preview_ref: ImageTk.PhotoImage | None = None
         self.preview_size = (1, 1)
