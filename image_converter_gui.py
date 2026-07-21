@@ -1133,7 +1133,14 @@ class ImageEditorWindow:
         Button(top, text="↷", command=self.redo, width=3).pack(side="left", padx=(4, 0))
         Button(top, text="⟳90", command=self._rotate_90, width=5).pack(side="left", padx=(4, 0))
         self._toolbar_separator(top)
-        for label, where in [("⫷", "left"), ("↔", "hcenter"), ("⫸", "right"), ("⫶", "top"), ("↕", "vcenter"), ("⫵", "bottom")]:
+        for label, where in [
+            ("▏▰", "left"),
+            ("▰│▰", "hcenter"),
+            ("▰▏", "right"),
+            ("▔▰", "top"),
+            ("▰─▰", "vcenter"),
+            ("▁▰", "bottom"),
+        ]:
             Button(top, text=label, command=lambda w=where: self._align_image(w), width=3).pack(side="left", padx=(4, 0))
         self._toolbar_separator(top)
         for label, ratio in [("1:1", 1 / 1), ("16:9", 16 / 9), ("9:16", 9 / 16), ("4:3", 4 / 3), ("3:4", 3 / 4), ("3:2", 3 / 2)]:
@@ -1385,14 +1392,27 @@ class ImageEditorWindow:
         ix, iy = self.image_offset
         pw, ph = self.preview_size
         cw, ch = self.canvas_size
-        if abs(ix) <= self.SNAP:
-            ix = 0
-        if abs(iy) <= self.SNAP:
-            iy = 0
-        if abs(cw - (ix + pw)) <= self.SNAP:
-            ix = cw - pw
-        if abs(ch - (iy + ph)) <= self.SNAP:
-            iy = ch - ph
+        x1, y1, x2, y2 = self.output_box
+        left_targets = [0, x1, x2]
+        right_targets = [cw, x1, x2]
+        top_targets = [0, y1, y2]
+        bottom_targets = [ch, y1, y2]
+        for target in left_targets:
+            if abs(ix - target) <= self.SNAP:
+                ix = target
+                break
+        for target in right_targets:
+            if abs((ix + pw) - target) <= self.SNAP:
+                ix = target - pw
+                break
+        for target in top_targets:
+            if abs(iy - target) <= self.SNAP:
+                iy = target
+                break
+        for target in bottom_targets:
+            if abs((iy + ph) - target) <= self.SNAP:
+                iy = target - ph
+                break
         self.image_offset = [ix, iy]
 
     def _align_image(self, where: str) -> None:
