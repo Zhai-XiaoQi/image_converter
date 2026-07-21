@@ -1103,6 +1103,7 @@ class ImageEditorWindow:
         self.undo_stack: list[dict[str, object]] = []
         self.redo_stack: list[dict[str, object]] = []
         self.last_saved_path: Path | None = None
+        self.align_icons: dict[str, ImageTk.PhotoImage] = {}
 
         self._build_ui()
         self.win.after(80, self._reset_view)
@@ -1133,15 +1134,9 @@ class ImageEditorWindow:
         Button(top, text="↷", command=self.redo, width=3).pack(side="left", padx=(4, 0))
         Button(top, text="⟳90", command=self._rotate_90, width=5).pack(side="left", padx=(4, 0))
         self._toolbar_separator(top)
-        for label, where in [
-            ("▏▰", "left"),
-            ("▰│▰", "hcenter"),
-            ("▰▏", "right"),
-            ("▔▰", "top"),
-            ("▰─▰", "vcenter"),
-            ("▁▰", "bottom"),
-        ]:
-            Button(top, text=label, command=lambda w=where: self._align_image(w), width=3).pack(side="left", padx=(4, 0))
+        self._build_align_icons()
+        for where in ["left", "hcenter", "right", "top", "vcenter", "bottom"]:
+            Button(top, image=self.align_icons[where], command=lambda w=where: self._align_image(w), width=28, height=24).pack(side="left", padx=(4, 0))
         self._toolbar_separator(top)
         for label, ratio in [("1:1", 1 / 1), ("16:9", 16 / 9), ("9:16", 9 / 16), ("4:3", 4 / 3), ("3:4", 3 / 4), ("3:2", 3 / 2)]:
             Button(top, text=label, command=lambda r=ratio: self._apply_ratio_preset(r), width=5).pack(side="left", padx=(4, 0))
@@ -1183,6 +1178,40 @@ class ImageEditorWindow:
 
     def _toolbar_separator(self, parent: Frame) -> None:
         Frame(parent, width=1, height=24, bg="#c8c8c8").pack(side="left", padx=(12, 8))
+
+    def _build_align_icons(self) -> None:
+        if self.align_icons:
+            return
+        for kind in ["left", "hcenter", "right", "top", "vcenter", "bottom"]:
+            img = Image.new("RGBA", (22, 18), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+            line = "#5d636b"
+            block = "#5d636b"
+            if kind == "left":
+                draw.line((4, 3, 4, 15), fill=line, width=2)
+                draw.rectangle((8, 4, 18, 8), fill=block)
+                draw.rectangle((8, 11, 15, 15), fill=block)
+            elif kind == "hcenter":
+                draw.line((11, 2, 11, 16), fill=line, width=2)
+                draw.rectangle((5, 4, 17, 8), fill=block)
+                draw.rectangle((7, 11, 15, 15), fill=block)
+            elif kind == "right":
+                draw.line((18, 3, 18, 15), fill=line, width=2)
+                draw.rectangle((4, 4, 14, 8), fill=block)
+                draw.rectangle((7, 11, 14, 15), fill=block)
+            elif kind == "top":
+                draw.line((4, 4, 18, 4), fill=line, width=2)
+                draw.rectangle((6, 8, 10, 15), fill=block)
+                draw.rectangle((13, 8, 17, 12), fill=block)
+            elif kind == "vcenter":
+                draw.line((3, 9, 19, 9), fill=line, width=2)
+                draw.rectangle((6, 3, 10, 15), fill=block)
+                draw.rectangle((13, 5, 17, 13), fill=block)
+            elif kind == "bottom":
+                draw.line((4, 15, 18, 15), fill=line, width=2)
+                draw.rectangle((6, 4, 10, 11), fill=block)
+                draw.rectangle((13, 8, 17, 11), fill=block)
+            self.align_icons[kind] = ImageTk.PhotoImage(img)
 
     def _reset_view(self) -> None:
         self.win.update_idletasks()
@@ -1630,6 +1659,7 @@ class EmbeddedImageEditor(ImageEditorWindow):
         self.undo_stack: list[dict[str, object]] = []
         self.redo_stack: list[dict[str, object]] = []
         self.last_saved_path: Path | None = None
+        self.align_icons: dict[str, ImageTk.PhotoImage] = {}
 
         self._build_ui()
         self.win.after(80, self._reset_view)
