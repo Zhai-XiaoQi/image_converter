@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# PyInstaller generated output
+build/
+dist/
+
+# Local packaging artifacts
+*.zip
+*.7z
+*.rar
+
+# Logs and reports generated while using the tool
+conversion_report.txt
+*.log
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

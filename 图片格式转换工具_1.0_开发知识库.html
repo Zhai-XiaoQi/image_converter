@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>图片格式转换工具 1.0 开发知识库</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --text: #17202a;
+      --muted: #607080;
+      --line: #d9e0e7;
+      --accent: #1769e0;
+      --accent-soft: #eaf2ff;
+      --ok: #18864b;
+      --warn: #9a6400;
+      --danger: #b42318;
+      --code: #101828;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.75;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+      padding: 24px 18px;
+      border-right: 1px solid var(--line);
+      background: #f8fafc;
+    }
+    .brand {
+      padding: 12px 12px 18px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 18px;
+    }
+    .brand h1 {
+      margin: 0;
+      font-size: 21px;
+      line-height: 1.35;
+    }
+    .brand p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    nav a {
+      display: block;
+      color: #334155;
+      text-decoration: none;
+      padding: 8px 10px;
+      margin: 3px 0;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    nav a:hover, nav a.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    main {
+      max-width: 1180px;
+      padding: 34px 42px 80px;
+    }
+    .hero {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 34px;
+      margin-bottom: 22px;
+    }
+    .hero h2 {
+      margin: 0 0 10px;
+      font-size: 34px;
+      line-height: 1.25;
+    }
+    .hero p {
+      margin: 0;
+      max-width: 850px;
+      color: var(--muted);
+      font-size: 17px;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 28px;
+      margin: 18px 0;
+    }
+    h2 {
+      margin: 0 0 16px;
+      font-size: 26px;
+      line-height: 1.3;
+    }
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 19px;
+    }
+    p { margin: 8px 0; }
+    ul, ol { padding-left: 22px; }
+    li { margin: 6px 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .cards-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      background: #fbfcfe;
+    }
+    .card h3 {
+      margin-top: 0;
+      font-size: 17px;
+    }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      margin: 2px 4px 2px 0;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .note, .warning, .danger {
+      padding: 14px 16px;
+      border-radius: 8px;
+      margin: 14px 0;
+      border-left: 4px solid;
+      background: #fbfcfe;
+    }
+    .note { border-color: var(--accent); }
+    .warning { border-color: var(--warn); background: #fff8e8; }
+    .danger { border-color: var(--danger); background: #fff1f0; }
+    code {
+      background: #eef2f6;
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.94em;
+    }
+    pre {
+      overflow: auto;
+      padding: 16px;
+      border-radius: 8px;
+      background: var(--code);
+      color: #e6edf3;
+      line-height: 1.55;
+      font-size: 13px;
+    }
+    .timeline {
+      position: relative;
+      padding-left: 28px;
+    }
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 8px;
+      top: 6px;
+      bottom: 6px;
+      width: 2px;
+      background: var(--line);
+    }
+    .step {
+      position: relative;
+      margin: 18px 0;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }
+    .step::before {
+      content: "";
+      position: absolute;
+      left: -26px;
+      top: 18px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+    .step h3 { margin: 0 0 6px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      vertical-align: top;
+    }
+    th {
+      background: #f1f5f9;
+      text-align: left;
+    }
+    .checklist label {
+      display: block;
+      margin: 8px 0;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfe;
+    }
+    .footer {
+      color: var(--muted);
+      text-align: center;
+      margin-top: 24px;
+      font-size: 13px;
+    }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      aside {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      main { padding: 22px 16px 60px; }
+      .grid, .cards-3 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <h1>图片格式转换工具 1.0</h1>
+        <p>开发知识库 / 给小白看的复盘文档</p>
+      </div>
+      <nav id="toc">
+        <a href="#overview">项目概览</a>
+        <a href="#why">为什么做这个工具</a>
+        <a href="#timeline">开发路线</a>
+        <a href="#features">1.0 功能总览</a>
+        <a href="#tech-stack">技术栈地图</a>
+        <a href="#architecture">核心结构</a>
+        <a href="#batch">批量转换模块</a>
+        <a href="#preview">目录树与预览</a>
+        <a href="#single-edit">单图编辑模块</a>
+        <a href="#package">打包发布</a>
+        <a href="#usage">使用说明</a>
+        <a href="#pitfalls">踩坑与经验</a>
+        <a href="#template">复用模板</a>
+        <a href="#faq">常见问题</a>
+      </nav>
+    </aside>
+
+    <main>
+      <div class="hero" id="overview">
+        <h2>从一次图片整理任务，沉淀成一个可分享的小工具</h2>
+        <p>这个知识库记录了“图片格式转换工具 1.0”的完整开发过程。目标不是只告诉你代码写了什么，而是让不懂编程的人也能理解：需求怎么拆、功能怎么一步步长出来、每个模块用了什么技术、最后怎么打包给别人用。</p>
+      </div>
+
+      <section id="why">
+        <h2>1. 为什么做这个工具</h2>
+        <p>最开始的需求不是“做软件”，而是一个很具体的素材处理问题：图片按语言和类型整理后，还要处理 PNG、JPG、WEBP、渐进式 JPG 等格式。手动处理可以做一次，但每次都靠人工复制、改名、检查、转换，会有三个问题：</p>
+        <ul>
+          <li><strong>容易出错：</strong>图片多、语言多、目录多，手动移动和转换容易漏图、错图。</li>
+          <li><strong>重复劳动：</strong>同类任务以后还会出现，不能每次都从头做。</li>
+          <li><strong>协作门槛高：</strong>如果发给运营或同事，他们不一定会 Python，也不适合让他们跑命令。</li>
+        </ul>
+        <div class="note">
+          <strong>核心思路：</strong>先把一次具体任务做对，再把可重复的步骤抽出来，变成可视化工具，最后打包成 EXE 给别人双击使用。
+        </div>
+      </section>
+
+      <section id="timeline">
+        <h2>2. 开发路线</h2>
+        <div class="timeline">
+          <div class="step">
+            <h3>0. 图片整理任务</h3>
+            <p>先按语言和大类整理素材，确认文件数量、PNG 明细、语言是否放错。这个阶段证明了“文件处理可以交给脚本”。</p>
+          </div>
+          <div class="step">
+            <h3>1. 脚本版格式转换</h3>
+            <p>把 PNG、JPG、WEBP 转换逻辑做成 Python 脚本，支持质量、透明背景、保留目录结构、报告输出。</p>
+          </div>
+          <div class="step">
+            <h3>2. Tkinter 可视化界面</h3>
+            <p>从命令行升级为窗口软件，用户可以选择文件夹、选择输出格式、点击按钮转换，不需要懂命令。</p>
+          </div>
+          <div class="step">
+            <h3>3. 目录树和网格预览</h3>
+            <p>增加左侧文件树、右侧缩略图预览、格式筛选、模糊搜索、勾选处理，减少误操作。</p>
+          </div>
+          <div class="step">
+            <h3>4. 单图编辑能力</h3>
+            <p>增加裁切框、拖拽、吸附、比例预设、撤销/重做、缩放、旋转、对齐和保存副本。</p>
+          </div>
+          <div class="step">
+            <h3>5. 选择同步和体验优化</h3>
+            <p>右侧预览改成只显示左侧勾选的图片，批量页和单图页用 Tab 区分，顶部布局压缩，默认窗口居中。</p>
+          </div>
+          <div class="step">
+            <h3>6. EXE 打包分享</h3>
+            <p>用 PyInstaller 打包成无黑窗 EXE，并生成 zip 分享包。别人不需要安装 Python。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="features">
+        <h2>3. 1.0 功能总览</h2>
+        <div class="cards-3">
+          <div class="card">
+            <h3>批量转换</h3>
+            <p>选择文件夹或多个图片，批量输出 JPG、PNG、WEBP。</p>
+            <span class="tag">质量设置</span><span class="tag">保留目录</span><span class="tag">转换报告</span>
+          </div>
+          <div class="card">
+            <h3>可视化预览</h3>
+            <p>左侧目录树勾选，右侧只显示已选图片，便于确认处理范围。</p>
+            <span class="tag">目录树</span><span class="tag">缩略图</span><span class="tag">滚轮浏览</span>
+          </div>
+          <div class="card">
+            <h3>筛选搜索</h3>
+            <p>按格式筛选，按文件名或路径模糊搜索，快速定位目标图片。</p>
+            <span class="tag">JPG</span><span class="tag">PNG</span><span class="tag">WEBP</span>
+          </div>
+          <div class="card">
+            <h3>单图处理</h3>
+            <p>单独打开一张图，裁切、缩放、旋转、比例预设后保存副本。</p>
+            <span class="tag">Canvas</span><span class="tag">裁切框</span><span class="tag">撤销重做</span>
+          </div>
+          <div class="card">
+            <h3>安全选项</h3>
+            <p>覆盖文件和删除原图默认都不是强制行为，降低误删风险。</p>
+            <span class="tag">覆盖确认</span><span class="tag">报告记录</span>
+          </div>
+          <div class="card">
+            <h3>EXE 分享</h3>
+            <p>打包成 Windows 可执行程序，同事双击即可使用。</p>
+            <span class="tag">PyInstaller</span><span class="tag">--noconsole</span><span class="tag">zip</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="tech-stack">
+        <h2>4. 技术栈地图</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>模块</th>
+              <th>用到的技术</th>
+              <th>它解决的问题</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>窗口界面</td>
+              <td><code>Python</code>、<code>Tkinter</code>、<code>ttk</code>、<code>Notebook</code></td>
+              <td>做出不需要命令行的桌面窗口，用 Tab 区分批量转换和单图处理。</td>
+            </tr>
+            <tr>
+              <td>文件扫描</td>
+              <td><code>pathlib.Path</code>、递归扫描、扩展名判断</td>
+              <td>读取文件夹和子文件夹里的图片，过滤支持的格式，跳过真实输出目录。</td>
+            </tr>
+            <tr>
+              <td>图片转换</td>
+              <td><code>Pillow</code>、<code>Image.open</code>、<code>save</code></td>
+              <td>把 JPG、PNG、WEBP、BMP、TIFF 等输入图片转换成目标格式。</td>
+            </tr>
+            <tr>
+              <td>缩略图预览</td>
+              <td><code>Pillow</code>、<code>ImageTk.PhotoImage</code>、缩略图缓存</td>
+              <td>快速展示图片预览，避免每次重排都重新读取大图。</td>
+            </tr>
+            <tr>
+              <td>目录树</td>
+              <td><code>ttk.Treeview</code>、自绘勾选图标</td>
+              <td>按真实父子目录显示图片，并支持文件夹联动勾选。</td>
+            </tr>
+            <tr>
+              <td>单图编辑</td>
+              <td><code>Canvas</code>、鼠标事件、裁切框坐标计算</td>
+              <td>实现拖拽图片、拖拽裁切框、边缘吸附、比例预设和撤销重做。</td>
+            </tr>
+            <tr>
+              <td>打包发布</td>
+              <td><code>PyInstaller</code>、<code>--noconsole</code>、<code>dist</code></td>
+              <td>把 Python 脚本变成可分享的 Windows EXE，不要求对方安装 Python。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="architecture">
+        <h2>5. 核心结构</h2>
+        <p>这个工具主要由三个对象组成。小白可以把它理解成：一个负责主窗口，一个负责一张待转换图片的数据，一个负责单图编辑。</p>
+        <div class="grid">
+          <div class="card">
+            <h3><code>ImageConverterApp</code></h3>
+            <p>主程序。负责创建窗口、扫描图片、显示目录树和预览、执行批量转换、打开单图处理页。</p>
+          </div>
+          <div class="card">
+            <h3><code>ConvertJob</code></h3>
+            <p>每张图的一条任务记录。里面包含原路径、目标路径、是否选中、树节点 ID、状态和消息。</p>
+          </div>
+          <div class="card">
+            <h3><code>ImageEditorWindow</code></h3>
+            <p>弹窗式单图编辑器。处理裁切框、拖拽、缩放、旋转、保存副本、覆盖原图。</p>
+          </div>
+          <div class="card">
+            <h3><code>EmbeddedImageEditor</code></h3>
+            <p>嵌入式单图编辑器。复用弹窗编辑逻辑，放到“单图处理”Tab 页面里。</p>
+          </div>
+        </div>
+        <pre><code>image_format_converter_tool/
+├─ image_converter_gui.py              # 主程序源码
+├─ 启动图片格式转换工具.bat              # 备用启动入口
+├─ 启动图片格式转换工具_无黑窗.vbs        # 推荐脚本版启动入口
+├─ README.txt                          # 简短说明
+├─ 图片格式转换工具.spec                 # PyInstaller 打包配置
+└─ dist/图片格式转换工具/
+   ├─ 图片格式转换工具.exe               # EXE 启动文件
+   └─ _internal/                        # EXE 运行依赖，分享时不能丢</code></pre>
+      </section>
+
+      <section id="batch">
+        <h2>6. 批量转换模块</h2>
+        <h3>它做什么</h3>
+        <p>批量转换模块负责把一批图片统一转成 JPG、PNG 或 WEBP。用户可以选择一个文件夹，也可以选择多个独立文件。</p>
+        <h3>关键技术</h3>
+        <ul>
+          <li><code>Path.rglob("*")</code>：递归扫描子文件夹。</li>
+          <li><code>SUPPORTED_INPUTS</code>：限制输入格式，避免把非图片文件当图片处理。</li>
+          <li><code>Pillow Image.save</code>：按不同格式保存输出。</li>
+          <li><code>conversion_report.txt</code>：记录成功、失败、跳过、未选数量。</li>
+        </ul>
+        <h3>为什么要保留目录结构</h3>
+        <p>素材常常不是平铺在一个文件夹里，而是按语言、渠道、素材类型分层。如果转换后全部丢到一个目录，会失去上下文，还可能重名覆盖。因此工具支持“保留目录结构”。</p>
+        <div class="warning">
+          <strong>注意：</strong>输出目录不要放在输入目录内部，否则容易把输出结果再次扫进去。工具会尽量跳过当前输出目录，但最稳妥的做法是把输出目录放到输入目录旁边。
+        </div>
+      </section>
+
+      <section id="preview">
+        <h2>7. 目录树与预览模块</h2>
+        <p>预览模块的目标是让用户在转换前看清楚“到底要处理哪些图”。左侧是目录树，右侧是缩略图网格。</p>
+        <div class="grid">
+          <div class="card">
+            <h3>左侧目录树</h3>
+            <p>用 <code>ttk.Treeview</code> 展示父文件夹、子文件夹和图片文件。文件夹勾选会联动子项，子项变化也会反映到父文件夹状态。</p>
+          </div>
+          <div class="card">
+            <h3>右侧预览</h3>
+            <p>右侧只显示当前已勾选图片。左侧选什么，右侧就显示什么，避免“看得到但不会处理”的误解。</p>
+          </div>
+          <div class="card">
+            <h3>筛选与搜索</h3>
+            <p>按 JPG、PNG、WEBP、其他格式筛选；搜索框支持按文件名和路径模糊搜索。</p>
+          </div>
+          <div class="card">
+            <h3>性能优化</h3>
+            <p>缩略图按文件路径和修改时间缓存，窗口重排时只重新布局，不重复读取图片。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="single-edit">
+        <h2>8. 单图编辑模块</h2>
+        <p>单图编辑是 1.0 里最像“设计工具”的部分。它使用 Tkinter 的 <code>Canvas</code> 实现可交互画布。</p>
+        <h3>核心交互</h3>
+        <ul>
+          <li>绿色框代表最终输出区域，拖四边或四角可以改变裁切范围。</li>
+          <li>鼠标在图片内部时拖动图片，用来调整保留位置。</li>
+          <li>滚轮缩放图片，旋转按钮可以 90 度旋转。</li>
+          <li>拖拽边框靠近图片或画布边缘时自动吸附。</li>
+          <li>比例预设支持 <code>1:1</code>、<code>16:9</code>、<code>9:16</code>、<code>4:3</code>、<code>3:4</code>、<code>3:2</code>。</li>
+          <li>撤销和重做保存裁切框、图片位置、缩放、旋转等状态。</li>
+        </ul>
+        <h3>为什么保存副本</h3>
+        <p>图片编辑有风险，尤其是裁切和覆盖。默认保存副本可以保护原图。副本命名为 <code>原文件名_edited.ext</code>，如果已存在，会自动递增为 <code>_edited_2</code>。</p>
+        <div class="danger">
+          <strong>覆盖原图要谨慎：</strong>覆盖前工具会弹窗确认，但建议重要素材先保存副本。
+        </div>
+      </section>
+
+      <section id="package">
+        <h2>9. 打包发布</h2>
+        <p>脚本版需要 Python 和 Pillow，适合开发者自己用。EXE 版适合发给运营、设计或其他同事。</p>
+        <h3>打包技术</h3>
+        <p>使用 <code>PyInstaller</code>。关键参数是 <code>--noconsole</code>，它让软件启动时不弹出黑色命令行窗口。</p>
+        <pre><code>python -m PyInstaller --noconsole --name 图片格式转换工具 ^
+  --distpath image_format_converter_tool\dist ^
+  --workpath image_format_converter_tool\build ^
+  --specpath image_format_converter_tool ^
+  image_format_converter_tool\image_converter_gui.py</code></pre>
+        <h3>分享规则</h3>
+        <ul>
+          <li>可以分享：<code>图片格式转换工具_EXE版.zip</code>。</li>
+          <li>也可以分享整个文件夹：<code>图片格式转换工具_EXE版</code>。</li>
+          <li>不要只发 <code>图片格式转换工具.exe</code>，因为 <code>_internal</code> 文件夹是运行依赖。</li>
+        </ul>
+        <div class="note">
+          <strong>1.0 发布包：</strong>EXE 冒烟测试已通过，可以正常启动。zip 大小约 25 MB。
+        </div>
+      </section>
+
+      <section id="usage">
+        <h2>10. 使用说明</h2>
+        <h3>批量转换</h3>
+        <ol>
+          <li>打开软件，进入“批量转换”。</li>
+          <li>选择文件夹或选择多个文件。</li>
+          <li>选择输出格式、质量、输出目录。</li>
+          <li>点击“扫描预览”。</li>
+          <li>在左侧目录树勾选要处理的图片，右侧会同步显示。</li>
+          <li>确认无误后点击“开始转换”。</li>
+        </ol>
+        <h3>单图处理</h3>
+        <ol>
+          <li>进入“单图处理”。</li>
+          <li>选择图片，或粘贴图片路径。</li>
+          <li>拖动绿色框调整裁切区域，拖动图片调整保留位置。</li>
+          <li>可使用比例预设、旋转、撤销、重做、对齐等功能。</li>
+          <li>点击保存副本，或按目标格式保存转换副本。</li>
+          <li>点击“打开结果”查看保存位置。</li>
+        </ol>
+      </section>
+
+      <section id="pitfalls">
+        <h2>11. 踩坑与经验</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>问题</th>
+              <th>原因</th>
+              <th>解决方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>双击 BAT 报错</td>
+              <td>电脑没有识别 Python 命令，或依赖没装。</td>
+              <td>增加 VBS 无黑窗入口，并最终打包成 EXE。</td>
+            </tr>
+            <tr>
+              <td>右侧预览不显示</td>
+              <td>筛选后卡片没有立即重排，滚动区域没有刷新。</td>
+              <td>筛选后立即重建卡片并刷新 <code>scrollregion</code>。</td>
+            </tr>
+            <tr>
+              <td>子文件夹没读到</td>
+              <td>早期按文件夹名跳过 <code>converted_images</code>，规则太粗。</td>
+              <td>改为只跳过当前设置的输出目录本身。</td>
+            </tr>
+            <tr>
+              <td>悬停预览抖动</td>
+              <td>hover 时改变边框宽度，导致布局重排。</td>
+              <td>hover 只改背景色，不改变卡片尺寸。</td>
+            </tr>
+            <tr>
+              <td>EXE 单独发打不开</td>
+              <td>PyInstaller 文件夹模式需要 <code>_internal</code>。</td>
+              <td>分享整个文件夹或 zip 包。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="template">
+        <h2>12. 可复用模板：如何把重复工作做成工具</h2>
+        <h3>第一步：把人工步骤写清楚</h3>
+        <p>不要一开始就说“我要做软件”。先写清楚：输入是什么、输出是什么、中间要做哪些重复动作、哪里最容易出错。</p>
+        <h3>第二步：先做最小脚本</h3>
+        <p>先让脚本能完成核心动作。例如这个项目里，核心动作就是“读取图片，转换格式，保存到输出目录”。</p>
+        <h3>第三步：加可视化</h3>
+        <p>当脚本能跑通后，再加界面，让非技术用户可以选择文件、勾选图片、预览结果。</p>
+        <h3>第四步：加安全保护</h3>
+        <p>包括转换报告、覆盖确认、删除原图确认、默认保存副本等。越是给别人用，越要降低误操作成本。</p>
+        <h3>第五步：打包分享</h3>
+        <p>如果使用者不是开发者，就打成 EXE 或安装包。分享时附上简单说明，告诉对方如何启动、如何避免误操作。</p>
+        <div class="checklist">
+          <label><input type="checkbox"> 我已经写清楚输入、输出和处理规则。</label>
+          <label><input type="checkbox"> 我已经先用脚本验证核心流程。</label>
+          <label><input type="checkbox"> 我已经做了可视化界面，减少命令行依赖。</label>
+          <label><input type="checkbox"> 我已经加了预览、报告和风险提示。</label>
+          <label><input type="checkbox"> 我已经打包并做过启动测试。</label>
+        </div>
+      </section>
+
+      <section id="faq">
+        <h2>13. 常见问题</h2>
+        <h3>渐进式支持全部格式吗？</h3>
+        <p>不支持全部格式。当前工具里的“仅 JPG 渐进式”只对 JPG/JPEG 输出有意义，默认不勾选。</p>
+        <h3>为什么要有脚本版和 EXE 版？</h3>
+        <p>脚本版方便继续开发和修改；EXE 版方便给别人用。二者用途不同，建议都保留。</p>
+        <h3>为什么右侧只显示勾选的图片？</h3>
+        <p>因为右侧预览代表“即将处理的范围”。左侧选什么，右侧显示什么，更不容易误解。</p>
+        <h3>单图编辑会破坏原图吗？</h3>
+        <p>默认保存副本，不破坏原图。只有点击覆盖原图并确认后，才会覆盖。</p>
+        <h3>以后还能继续升级吗？</h3>
+        <p>可以。比如可以做批量尺寸调整、批量水印、更多格式、预设模板、配置保存、安装包等。这些可以作为 1.1 或 2.0。</p>
+      </section>
+
+      <div class="footer">
+        图片格式转换工具 1.0 开发知识库 · 本地静态网页 · 可直接双击打开
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const links = Array.from(document.querySelectorAll("#toc a"));
+    const sections = links.map(a => document.querySelector(a.getAttribute("href"))).filter(Boolean);
+    function syncActiveLink() {
+      const y = window.scrollY + 120;
+      let current = sections[0];
+      for (const section of sections) {
+        if (section.offsetTop <= y) current = section;
+      }
+      links.forEach(a => a.classList.toggle("active", a.getAttribute("href") === "#" + current.id));
+    }
+    window.addEventListener("scroll", syncActiveLink, { passive: true });
+    syncActiveLink();
+  </script>
+</body>
+</html>
