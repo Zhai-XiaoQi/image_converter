@@ -62,11 +62,9 @@ class ImageConverterApp:
         self.thumb_cache: dict[tuple[str, int, tuple[int, int]], ImageTk.PhotoImage] = {}
         self.tree_icons: dict[tuple[str, str], ImageTk.PhotoImage] = {}
         self.hover_tree_item: str | None = None
-        self.hover_window: Toplevel | None = None
-        self.hover_ref: ImageTk.PhotoImage | None = None
-        self.hover_after_id: str | None = None
         self.layout_after_id: str | None = None
         self.scan_after_id: str | None = None
+        self.preview_after_id: str | None = None
         self.worker: threading.Thread | None = None
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
 
@@ -91,6 +89,7 @@ class ImageConverterApp:
         self.input_text = StringVar(value="")
         self.output_text = StringVar(value="")
         self.status_text = StringVar(value="请选择图片或文件夹。")
+        self.status_number_font = ("Microsoft YaHei UI", 9, "bold")
 
         self._build_ui()
         self._build_tree_icons()
@@ -226,7 +225,9 @@ class ImageConverterApp:
             activeforeground="white",
             font=("Microsoft YaHei UI", 10, "bold"),
         ).pack(side="left", padx=(10, 0), ipady=2)
-        Label(main, textvariable=self.status_text, anchor="w").pack(fill="x", pady=(8, 0))
+        self.status_frame = Frame(main)
+        self.status_frame.pack(fill="x", pady=(8, 0))
+        self._set_status_message("请选择图片或文件夹。")
         for drop_widget in (preview, self.tree, self.grid_canvas):
             self._enable_batch_drop(drop_widget)
         self._build_single_editor_tab(module_font)
@@ -238,6 +239,8 @@ class ImageConverterApp:
         self.root.bind("<Escape>", self._shortcut_escape)
         self.root.bind("<Control-s>", self._shortcut_save_single)
         self.root.bind("<Control-S>", self._shortcut_save_single)
+        self.root.bind("<Control-v>", self._shortcut_paste_single)
+        self.root.bind("<Control-V>", self._shortcut_paste_single)
         self.root.bind("<Key-r>", self._shortcut_reset_single)
         self.root.bind("<Key-R>", self._shortcut_reset_single)
 
@@ -248,12 +251,37 @@ class ImageConverterApp:
         return None
 
     def _shortcut_escape(self, _event) -> str:
-        self._hide_hover_preview()
         return "break"
+
+    def _set_status_message(self, message: str) -> None:
+        self.status_text.set(message)
+        if not hasattr(self, "status_frame"):
+            return
+        for child in self.status_frame.winfo_children():
+            child.destroy()
+        Label(self.status_frame, text=message, anchor="w").pack(side="left")
+
+    def _set_status_parts(self, parts: list[tuple[str, bool]]) -> None:
+        self.status_text.set("".join(text for text, _highlight in parts))
+        if not hasattr(self, "status_frame"):
+            return
+        for child in self.status_frame.winfo_children():
+            child.destroy()
+        for text, highlight in parts:
+            options = {"text": text, "anchor": "w"}
+            if highlight:
+                options.update({"fg": "#0b5cad", "font": self.status_number_font})
+            Label(self.status_frame, **options).pack(side="left")
 
     def _shortcut_save_single(self, _event) -> str | None:
         if self.notebook.index("current") == 1 and self.single_editor:
             self.single_editor._save_copy_auto()
+            return "break"
+        return None
+
+    def _shortcut_paste_single(self, _event) -> str | None:
+        if self.notebook.index("current") == 1:
+            self.load_single_from_clipboard()
             return "break"
         return None
 
@@ -328,11 +356,11 @@ class ImageConverterApp:
         self.jobs.clear()
         self._clear_preview()
         if not self.input_paths:
-            self.status_text.set("请选择输入。")
+            self._set_status_message("请选择输入。")
             return
         out_root = Path(self.output_text.get().strip()) if self.output_text.get().strip() else None
         if not out_root:
-            self.status_text.set("请选择输出目录。")
+            self._set_status_message("请选择输出目录。")
             return
         base_root = self._base_root()
         output_ext = "." + self.output_format.get()
@@ -411,7 +439,6 @@ class ImageConverterApp:
             self.tree.delete(item)
         self._clear_grid()
         self.tree_nodes.clear()
-        self._hide_hover_preview()
 
     def _build_tree_icons(self) -> None:
         colors = {
@@ -485,25 +512,22 @@ class ImageConverterApp:
         top = Frame(card, bg="#f5f5f5")
         top.pack(fill="x")
         Checkbutton(top, variable=var, command=lambda i=idx: self._set_job_selected(i, self.card_vars[i].get()), bg="#f5f5f5", activebackground="#eaf3ff").pack(side="left")
-        actions = Frame(top, bg="#f5f5f5")
-        Button(actions, text="大图预览", command=lambda i=idx: self.open_large_preview(i), width=8).pack(side="right")
-        Button(actions, text="编辑", command=lambda i=idx: self.load_single_image(self.jobs[i].source), width=6).pack(side="right", padx=(0, 6))
-        card.action_frame = actions  # type: ignore[attr-defined]
+        Button(top, text="编辑", command=lambda i=idx: self.load_single_image(self.jobs[i].source), width=6).pack(side="right")
         thumb = self._get_thumbnail(job.source, (176, 126))
         image_label = Label(card, image=thumb, width=184, height=132, bg="#f7f7f4")
         image_label.image = thumb  # type: ignore[attr-defined]
         image_label.pack(fill="x", pady=(4, 0))
         rel = self._display_source_rel(job.source)
-        Label(card, text=rel.name, width=25, anchor="center", bg="#f5f5f5").pack(pady=(4, 0))
+        name_label = Label(card, text=rel.name, width=25, anchor="center", bg="#f5f5f5")
+        name_label.pack(pady=(4, 0))
         parent = str(rel.parent) if str(rel.parent) != "." else "(根目录)"
-        Label(card, text=parent, width=25, anchor="center", fg="#666", bg="#f5f5f5").pack()
-        card.bind("<Button-1>", lambda _e, i=idx: self._select_job_in_tree(i))
+        parent_label = Label(card, text=parent, width=25, anchor="center", fg="#666", bg="#f5f5f5")
+        parent_label.pack()
+        card.bind("<Button-1>", lambda _e, i=idx: self._schedule_card_preview(i))
         self._bind_card_hover(card)
-        image_label.bind("<Button-1>", lambda _e, i=idx: self._select_job_in_tree(i))
-        image_label.bind("<Double-Button-1>", lambda _e, i=idx: self.load_single_image(self.jobs[i].source))
-        image_label.bind("<Enter>", lambda e, p=job.source: self._schedule_hover(p, e.x_root, e.y_root))
-        image_label.bind("<Motion>", lambda e, p=job.source: self._schedule_hover(p, e.x_root, e.y_root))
-        image_label.bind("<Leave>", lambda _e: self._hide_hover_preview())
+        for clickable in (image_label, name_label, parent_label):
+            clickable.bind("<Button-1>", lambda _e, i=idx: self._schedule_card_preview(i))
+        image_label.bind("<Double-Button-1>", lambda _e, i=idx: self._open_card_editor(i))
         for widget in [card, top, image_label, *card.winfo_children()]:
             widget.bind("<MouseWheel>", self._on_grid_mousewheel, add="+")
 
@@ -527,17 +551,11 @@ class ImageConverterApp:
         def enter(_event=None) -> None:
             card.configure(bg="#eaf3ff")
             apply_bg(card, "#eaf3ff")
-            action_frame = getattr(card, "action_frame", None)
-            if action_frame and not action_frame.winfo_ismapped():
-                action_frame.pack(side="right")
 
         def leave(_event=None) -> None:
             def reset_if_outside() -> None:
                 if pointer_inside():
                     return
-                action_frame = getattr(card, "action_frame", None)
-                if action_frame:
-                    action_frame.pack_forget()
                 card.configure(bg="#f5f5f5")
                 apply_bg(card, "#f5f5f5")
 
@@ -546,6 +564,21 @@ class ImageConverterApp:
         for widget in [card, *card.winfo_children()]:
             widget.bind("<Enter>", enter, add="+")
             widget.bind("<Leave>", leave, add="+")
+
+    def _schedule_card_preview(self, job_index: int) -> str:
+        self._select_job_in_tree(job_index)
+        if self.preview_after_id:
+            self.root.after_cancel(self.preview_after_id)
+        self.preview_after_id = self.root.after(180, lambda i=job_index: self.open_large_preview(i))
+        return "break"
+
+    def _open_card_editor(self, job_index: int) -> str:
+        if self.preview_after_id:
+            self.root.after_cancel(self.preview_after_id)
+            self.preview_after_id = None
+        if 0 <= job_index < len(self.jobs):
+            self.load_single_image(self.jobs[job_index].source)
+        return "break"
 
     def _get_thumbnail(self, path: Path, size: tuple[int, int]) -> ImageTk.PhotoImage:
         try:
@@ -710,36 +743,13 @@ class ImageConverterApp:
 
     def _update_selected_status(self) -> None:
         selected = sum(1 for job in self.jobs if job.selected)
-        self.status_text.set(f"已扫描 {len(self.jobs)} 张图片，已选择 {selected} 张。")
-
-    def _schedule_hover(self, path: Path, x: int, y: int) -> None:
-        if self.hover_after_id:
-            self.root.after_cancel(self.hover_after_id)
-        self.hover_after_id = self.root.after(220, lambda: self._show_hover_preview(path, x, y))
-
-    def _show_hover_preview(self, path: Path, x: int, y: int) -> None:
-        try:
-            thumb = self._get_thumbnail(path, (620, 460))
-        except Exception:
-            return
-        self.hover_ref = thumb
-        if self.hover_window is None or not self.hover_window.winfo_exists():
-            self.hover_window = Toplevel(self.root)
-            self.hover_window.overrideredirect(True)
-            self.hover_window.attributes("-topmost", True)
-        for child in self.hover_window.winfo_children():
-            child.destroy()
-        label = Label(self.hover_window, image=self.hover_ref, bd=2, relief="solid")
-        label.pack()
-        self.hover_window.geometry(f"+{x + 18}+{y + 18}")
-        self.hover_window.deiconify()
-
-    def _hide_hover_preview(self) -> None:
-        if self.hover_after_id:
-            self.root.after_cancel(self.hover_after_id)
-            self.hover_after_id = None
-        if self.hover_window is not None and self.hover_window.winfo_exists():
-            self.hover_window.withdraw()
+        self._set_status_parts([
+            ("已扫描 ", False),
+            (str(len(self.jobs)), True),
+            (" 张图片，已选择 ", False),
+            (str(selected), True),
+            (" 张。", False),
+        ])
 
     def _on_grid_configure(self, _event) -> None:
         self.grid_canvas.configure(scrollregion=self.grid_canvas.bbox("all"))
@@ -766,7 +776,7 @@ class ImageConverterApp:
             if not ok:
                 return
         self.progress.config(value=0, maximum=len(selected_jobs))
-        self.status_text.set("开始转换...")
+        self._set_status_message("开始转换...")
         self.worker = threading.Thread(target=self._convert_worker, args=(selected_jobs,), daemon=True)
         self.worker.start()
 
@@ -862,7 +872,13 @@ class ImageConverterApp:
             return
         win = Toplevel(self.root)
         win.title(f"大图预览 - {source.name}")
-        win.geometry("1160x840")
+        width, height = 1160, 840
+        win.update_idletasks()
+        screen_w = win.winfo_screenwidth()
+        screen_h = win.winfo_screenheight()
+        x = max(0, (screen_w - width) // 2)
+        y = max(0, (screen_h - height) // 2)
+        win.geometry(f"{width}x{height}+{x}+{y}")
         Label(win, image=photo, bg="#222").pack(fill="both", expand=True, padx=12, pady=12)
         Label(win, text=str(source), anchor="w").pack(fill="x", padx=12, pady=(0, 12))
         win.image_ref = photo  # type: ignore[attr-defined]
@@ -1028,10 +1044,21 @@ class ImageConverterApp:
                 if kind == "progress":
                     index, total, ok, failed, skipped = payload  # type: ignore[misc]
                     self.progress.config(value=index)
-                    self.status_text.set(f"处理中 {index}/{total}，成功 {ok}，失败 {failed}，跳过 {skipped}")
+                    self._set_status_parts([
+                        ("处理中 ", False), (f"{index}/{total}", True),
+                        ("，成功 ", False), (str(ok), True),
+                        ("，失败 ", False), (str(failed), True),
+                        ("，跳过 ", False), (str(skipped), True),
+                    ])
                 elif kind == "done":
                     ok, failed, skipped, unselected, report_path, failures = payload  # type: ignore[misc]
-                    self.status_text.set(f"完成：成功 {ok}，失败 {failed}，跳过 {skipped}，未选 {unselected}。报告：{report_path}")
+                    self._set_status_parts([
+                        ("完成：成功 ", False), (str(ok), True),
+                        ("，失败 ", False), (str(failed), True),
+                        ("，跳过 ", False), (str(skipped), True),
+                        ("，未选 ", False), (str(unselected), True),
+                        (f"。报告：{report_path}", False),
+                    ])
                     summary = f"成功 {ok}\n失败 {failed}\n跳过 {skipped}\n未选 {unselected}\n\n报告：{report_path}"
                     if failures:
                         shown = "\n".join(str(item) for item in failures[:8])
@@ -1100,15 +1127,15 @@ class ImageEditorWindow:
         height_entry = Entry(top, textvariable=self.height_var, width=8)
         height_entry.pack(side="left")
         Checkbutton(top, text="等比例", variable=self.keep_ratio).pack(side="left", padx=(12, 0))
-        Button(top, text="重置", command=self._reset_defaults).pack(side="left", padx=(12, 0))
-        Button(top, text="↶", command=self.undo, width=3).pack(side="left", padx=(8, 0))
+        self._toolbar_separator(top)
+        Button(top, text="重置", command=self._reset_defaults).pack(side="left", padx=(8, 0))
+        Button(top, text="↶", command=self.undo, width=3).pack(side="left", padx=(4, 0))
         Button(top, text="↷", command=self.redo, width=3).pack(side="left", padx=(4, 0))
-        Button(top, text="|←", command=lambda: self._align_image("left"), width=3).pack(side="left", padx=(12, 0))
-        Button(top, text="→|", command=lambda: self._align_image("right"), width=3).pack(side="left", padx=(4, 0))
-        Button(top, text="↑", command=lambda: self._align_image("top"), width=3).pack(side="left", padx=(4, 0))
-        Button(top, text="↓", command=lambda: self._align_image("bottom"), width=3).pack(side="left", padx=(4, 0))
-        Button(top, text="◎", command=lambda: self._align_image("center"), width=3).pack(side="left", padx=(4, 0))
-        Button(top, text="⟳90", command=self._rotate_90, width=5).pack(side="left", padx=(12, 0))
+        Button(top, text="⟳90", command=self._rotate_90, width=5).pack(side="left", padx=(4, 0))
+        self._toolbar_separator(top)
+        for label, where in [("⫷", "left"), ("↔", "hcenter"), ("⫸", "right"), ("⫶", "top"), ("↕", "vcenter"), ("⫵", "bottom")]:
+            Button(top, text=label, command=lambda w=where: self._align_image(w), width=3).pack(side="left", padx=(4, 0))
+        self._toolbar_separator(top)
         for label, ratio in [("1:1", 1 / 1), ("16:9", 16 / 9), ("9:16", 9 / 16), ("4:3", 4 / 3), ("3:4", 3 / 4), ("3:2", 3 / 2)]:
             Button(top, text=label, command=lambda r=ratio: self._apply_ratio_preset(r), width=5).pack(side="left", padx=(4, 0))
         width_entry.bind("<FocusOut>", lambda _e: self._sync_box_from_size("w"))
@@ -1146,6 +1173,9 @@ class ImageEditorWindow:
             activeforeground="white",
             font=("Microsoft YaHei UI", 9, "bold"),
         ).pack(side="right", padx=(8, 0), ipady=1)
+
+    def _toolbar_separator(self, parent: Frame) -> None:
+        Frame(parent, width=1, height=24, bg="#c8c8c8").pack(side="left", padx=(12, 8))
 
     def _reset_view(self) -> None:
         self.win.update_idletasks()
@@ -1219,6 +1249,12 @@ class ImageEditorWindow:
     def _draw_overlay(self) -> None:
         self.canvas.delete("overlay")
         x1, y1, x2, y2 = self.output_box
+        cw, ch = self.canvas_size
+        mask_options = {"fill": "#000000", "stipple": "gray50", "outline": "", "tags": "overlay"}
+        self.canvas.create_rectangle(0, 0, cw, y1, **mask_options)
+        self.canvas.create_rectangle(0, y2, cw, ch, **mask_options)
+        self.canvas.create_rectangle(0, y1, x1, y2, **mask_options)
+        self.canvas.create_rectangle(x2, y1, cw, y2, **mask_options)
         self.canvas.create_rectangle(x1, y1, x2, y2, outline="#00d084", width=2, tags="overlay")
         for hx, hy in self._handles():
             self.canvas.create_rectangle(hx - self.HANDLE // 2, hy - self.HANDLE // 2, hx + self.HANDLE // 2, hy + self.HANDLE // 2, fill="#00d084", outline="#00d084", tags="overlay")
@@ -1365,10 +1401,14 @@ class ImageEditorWindow:
         pw, ph = self.preview_size
         if where == "left":
             self.image_offset[0] = x1
+        elif where == "hcenter":
+            self.image_offset[0] = x1 + ((x2 - x1) - pw) // 2
         elif where == "right":
             self.image_offset[0] = x2 - pw
         elif where == "top":
             self.image_offset[1] = y1
+        elif where == "vcenter":
+            self.image_offset[1] = y1 + ((y2 - y1) - ph) // 2
         elif where == "bottom":
             self.image_offset[1] = y2 - ph
         elif where == "center":
