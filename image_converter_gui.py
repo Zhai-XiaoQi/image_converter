@@ -1287,10 +1287,10 @@ class ImageEditorWindow:
         x1, y1, x2, y2 = self.output_box
         cw, ch = self.canvas_size
         mask_options = {"fill": "#000000", "stipple": "gray50", "outline": "", "tags": "overlay"}
-        self.canvas.create_rectangle(0, 0, cw, y1, **mask_options)
-        self.canvas.create_rectangle(0, y2, cw, ch, **mask_options)
-        self.canvas.create_rectangle(0, y1, x1, y2, **mask_options)
-        self.canvas.create_rectangle(x2, y1, cw, y2, **mask_options)
+        mask_areas = [(0, 0, cw, y1), (0, y2, cw, ch), (0, y1, x1, y2), (x2, y1, cw, y2)]
+        for area in mask_areas:
+            self.canvas.create_rectangle(*area, **mask_options)
+            self.canvas.create_rectangle(*area, **mask_options)
         self.canvas.create_rectangle(x1, y1, x2, y2, outline="#00d084", width=2, tags="overlay")
         for hx, hy in self._handles():
             self.canvas.create_rectangle(hx - self.HANDLE // 2, hy - self.HANDLE // 2, hx + self.HANDLE // 2, hy + self.HANDLE // 2, fill="#00d084", outline="#00d084", tags="overlay")
