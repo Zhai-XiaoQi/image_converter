@@ -60,6 +60,7 @@ DEFAULT_PRESETS = {
         "resize_mode": "exact",
         "resize_width": 1600,
         "resize_height": 1600,
+        "resize_scale_percent": 100,
         "resize_fit_mode": "pad",
         "rename_template": "{name}",
         "rename_prefix": "",
@@ -80,6 +81,7 @@ DEFAULT_PRESETS = {
         "resize_mode": "exact",
         "resize_width": 1464,
         "resize_height": 600,
+        "resize_scale_percent": 100,
         "resize_fit_mode": "crop",
         "rename_template": "{name}",
         "rename_prefix": "",
@@ -100,6 +102,7 @@ DEFAULT_PRESETS = {
         "resize_mode": "exact",
         "resize_width": 1500,
         "resize_height": 1125,
+        "resize_scale_percent": 100,
         "resize_fit_mode": "crop",
         "rename_template": "{name}",
         "rename_prefix": "",
@@ -120,6 +123,7 @@ DEFAULT_PRESETS = {
         "resize_mode": "none",
         "resize_width": 0,
         "resize_height": 0,
+        "resize_scale_percent": 100,
         "resize_fit_mode": "contain",
         "rename_template": "{name}",
         "rename_prefix": "",
@@ -146,8 +150,8 @@ class ImageConverterApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
         self.root.title("图片格式转换工具")
-        self.default_window_size = (1500, 960)
-        self.root.minsize(1180, 760)
+        self.default_window_size = (1600, 960)
+        self.root.minsize(1280, 760)
 
         self.input_paths: list[Path] = []
         self.jobs: list[ConvertJob] = []
@@ -179,6 +183,7 @@ class ImageConverterApp:
         self.resize_mode = StringVar(value="none")
         self.resize_width = IntVar(value=0)
         self.resize_height = IntVar(value=0)
+        self.resize_scale_percent = IntVar(value=100)
         self.resize_fit_mode = StringVar(value="pad")
         self.rename_template = StringVar(value="{name}")
         self.rename_prefix = StringVar(value="")
@@ -198,6 +203,7 @@ class ImageConverterApp:
         self.watermark_outline = BooleanVar(value=True)
         self.watermark_shadow = BooleanVar(value=True)
         self.heic_notice = StringVar(value="")
+        self.preset_summary = StringVar(value="选择预设后会自动回填格式、尺寸和处理规则。")
         self.search_text = StringVar(value="")
         self.filter_jpg = BooleanVar(value=True)
         self.filter_png = BooleanVar(value=True)
@@ -249,11 +255,32 @@ class ImageConverterApp:
             mode = str(values.get("resize_mode", "none"))
             if name == "WebP网页图" or mode == "none":
                 return f"{name} - 原尺寸"
+            if mode == "scale":
+                return f"{name} - {int(values.get('resize_scale_percent', 100) or 100)}%"
             if width and height:
                 return f"{name} - {width} x {height}"
             return name
 
         return ["自定义", *(display_name(name) for name in sorted(self.presets.keys()))]
+
+    def _preset_summary_text(self, name: str) -> str:
+        values = self.presets.get(name)
+        if not values:
+            return "自定义处理规则。"
+        output = str(values.get("output_format", "jpg")).upper()
+        mode = str(values.get("resize_mode", "none"))
+        if mode == "exact":
+            width = int(values.get("resize_width", 0) or 0)
+            height = int(values.get("resize_height", 0) or 0)
+            fit_map = {"stretch": "拉伸", "pad": "等比留白", "crop": "等比裁剪"}
+            fit = fit_map.get(str(values.get("resize_fit_mode", "pad")), str(values.get("resize_fit_mode", "pad")))
+            size = f"{width} x {height} / {fit}" if width and height else "指定长宽"
+        elif mode == "scale":
+            size = f"按比例缩放 {int(values.get('resize_scale_percent', 100) or 100)}%"
+        else:
+            size = "原尺寸"
+        compression = "目标体积" if str(values.get("compression_mode", "quality")) == "target" else f"质量 {int(values.get('quality', 92) or 92)}%"
+        return f"已套用：{name} / {output} / {size} / {compression}"
 
     def _preset_key_from_display(self, display_name: str) -> str:
         if display_name in self.presets:
@@ -275,6 +302,7 @@ class ImageConverterApp:
             "resize_mode": self.resize_mode.get(),
             "resize_width": self._safe_int_var(self.resize_width, 0),
             "resize_height": self._safe_int_var(self.resize_height, 0),
+            "resize_scale_percent": self._safe_int_var(self.resize_scale_percent, 100),
             "resize_fit_mode": self.resize_fit_mode.get(),
             "rename_template": self.rename_template.get(),
             "rename_prefix": self.rename_prefix.get(),
@@ -318,6 +346,7 @@ class ImageConverterApp:
         self.resize_mode.set(str(values.get("resize_mode", "none")))
         self.resize_width.set(int(values.get("resize_width", 0)))
         self.resize_height.set(int(values.get("resize_height", 0)))
+        self.resize_scale_percent.set(int(values.get("resize_scale_percent", 100)))
         self.resize_fit_mode.set(str(values.get("resize_fit_mode", "pad")))
         self.rename_template.set(str(values.get("rename_template", "{name}")))
         self.rename_prefix.set(str(values.get("rename_prefix", "")))
@@ -336,6 +365,7 @@ class ImageConverterApp:
         self.watermark_color.set(str(values.get("watermark_color", "#ffffff")))
         self.watermark_outline.set(bool(values.get("watermark_outline", True)))
         self.watermark_shadow.set(bool(values.get("watermark_shadow", True)))
+        self.preset_summary.set(self._preset_summary_text(name))
         self._on_output_format_change()
         self._update_control_states()
 
@@ -346,6 +376,8 @@ class ImageConverterApp:
         mode = str(values.get("resize_mode", "none"))
         if name == "WebP网页图" or mode == "none":
             return f"{name} - 原尺寸"
+        if mode == "scale":
+            return f"{name} - {int(values.get('resize_scale_percent', 100) or 100)}%"
         if width and height:
             return f"{name} - {width} x {height}"
         return name
@@ -377,185 +409,35 @@ class ImageConverterApp:
         main = Frame(self.notebook, padx=12, pady=12)
         self.notebook.add(main, text="批量转换")
 
-        settings_area = Frame(main)
-        settings_area.pack(fill="x")
-        left_settings = Frame(settings_area)
-        left_settings.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        top_area = Frame(main)
+        top_area.pack(fill="x", pady=(0, 8))
 
-        top = LabelFrame(left_settings, text="输入", font=module_font)
-        top.pack(fill="x")
+        top = LabelFrame(top_area, text="输入", font=module_font)
+        top.pack(side="left", fill="x", expand=True, padx=(0, 8))
         mode_row = Frame(top)
-        mode_row.pack(fill="x", padx=10, pady=(6, 2))
+        mode_row.pack(fill="x", padx=10, pady=(5, 1))
         Button(mode_row, text="选择文件夹", command=self.choose_folder_input, width=14).pack(side="left")
         Button(mode_row, text="选择文件", command=self.choose_files_input, width=14).pack(side="left", padx=(8, 0))
         Button(mode_row, text="扫描预览", command=self.scan_jobs, width=12).pack(side="left", padx=(8, 0))
+        Label(mode_row, text="支持：JPG / PNG / WEBP / HEIC / HEIF / BMP / TIFF", fg="#0b5cad").pack(side="left", padx=(14, 0))
+        self.heic_label = Label(mode_row, textvariable=self.heic_notice, fg="#b42318", anchor="w")
+        self.heic_label.pack(side="left", padx=(12, 0))
         input_row = Frame(top)
-        input_row.pack(fill="x", padx=10, pady=(2, 6))
+        input_row.pack(fill="x", padx=10, pady=(1, 5))
         Entry(input_row, textvariable=self.input_text).pack(side="left", fill="x", expand=True)
 
-        out = LabelFrame(left_settings, text="输出", font=module_font)
-        out.pack(fill="x", pady=(6, 0))
+        out = LabelFrame(top_area, text="输出", font=module_font)
+        out.pack(side="left", fill="x", expand=True)
         out_row = Frame(out)
-        out_row.pack(fill="x", padx=10, pady=6)
+        out_row.pack(fill="x", padx=10, pady=(17, 5))
         Entry(out_row, textvariable=self.output_text).pack(side="left", fill="x", expand=True)
         Button(out_row, text="选择输出目录", command=self.choose_output, width=14).pack(side="left", padx=(8, 0))
         Button(out_row, text="打开输出目录", command=self.open_output_dir, width=14).pack(side="left", padx=(8, 0))
 
-        opts = LabelFrame(settings_area, text="批量处理设置", font=module_font)
-        opts.pack(side="right", fill="both", padx=(8, 0))
+        content = PanedWindow(main, orient="horizontal", sashwidth=7)
+        content.pack(fill="both", expand=True)
 
-        preset_box = LabelFrame(opts, text="批量预设", font=("Microsoft YaHei UI", 9, "bold"))
-        preset_box.pack(fill="x", padx=8, pady=(6, 3))
-        preset_row = Frame(preset_box)
-        preset_row.pack(fill="x", padx=8, pady=5)
-        self.preset_combo = ttk.Combobox(preset_row, textvariable=self.preset_name, values=self._preset_names(), width=28, state="readonly")
-        self.preset_combo.pack(side="left")
-        self.preset_combo.bind("<<ComboboxSelected>>", lambda _e: self.apply_preset(self.preset_name.get()))
-        Button(preset_row, text="保存预设", command=self.save_current_preset, width=10).pack(side="left", padx=(8, 0))
-
-        heic_box = LabelFrame(opts, text="HEIC支持", font=("Microsoft YaHei UI", 9, "bold"))
-        heic_box.pack(fill="x", padx=8, pady=3)
-        self.heic_label = Label(heic_box, textvariable=self.heic_notice, fg="#0b5cad", anchor="w")
-        self.heic_label.pack(fill="x", padx=8, pady=4)
-
-        base_box = LabelFrame(opts, text="基础输出", font=("Microsoft YaHei UI", 9, "bold"))
-        base_box.pack(fill="x", padx=8, pady=3)
-        base_row1 = Frame(base_box)
-        base_row1.pack(fill="x", padx=8, pady=(5, 2))
-        Label(base_row1, text="输出格式").pack(side="left")
-        for label, value in [("JPG", "jpg"), ("PNG", "png"), ("WEBP", "webp")]:
-            Radiobutton(base_row1, text=label, variable=self.output_format, value=value, command=self._on_output_format_change).pack(side="left", padx=(10, 0))
-        self.progressive_check = Checkbutton(base_row1, text="仅 JPG 渐进式", variable=self.progressive_jpg)
-        self.progressive_check.pack(side="left", padx=(18, 0))
-        Checkbutton(base_row1, text="保留目录结构", variable=self.preserve_structure, command=self.scan_jobs).pack(side="left", padx=(18, 0))
-        base_row2 = Frame(base_box)
-        base_row2.pack(fill="x", padx=8, pady=(2, 5))
-        self.alpha_label = Label(base_row2, text="转 JPG 时背景色")
-        self.alpha_label.pack(side="left")
-        self.alpha_entry = Entry(base_row2, textvariable=self.alpha_bg, width=10)
-        self.alpha_entry.pack(side="left", padx=(6, 0))
-
-        resize_box = LabelFrame(opts, text="尺寸调整", font=("Microsoft YaHei UI", 9, "bold"))
-        resize_box.pack(fill="x", padx=8, pady=3)
-        resize_row1 = Frame(resize_box)
-        resize_row1.pack(fill="x", padx=8, pady=(5, 2))
-        self.resize_controls: list[object] = []
-        for label, value in [("不改变尺寸", "none"), ("按比例缩放", "scale"), ("指定长宽", "exact")]:
-            Radiobutton(resize_row1, text=label, variable=self.resize_mode, value=value, command=self._update_control_states).pack(side="left", padx=(0, 10))
-        resize_row2 = Frame(resize_box)
-        resize_row2.pack(fill="x", padx=8, pady=(2, 5))
-        Label(resize_row2, text="宽").pack(side="left")
-        self.resize_width_spin = ttk.Spinbox(resize_row2, from_=0, to=20000, textvariable=self.resize_width, width=7)
-        self.resize_width_spin.pack(side="left", padx=(4, 2))
-        Label(resize_row2, text="px  高").pack(side="left")
-        self.resize_height_spin = ttk.Spinbox(resize_row2, from_=0, to=20000, textvariable=self.resize_height, width=7)
-        self.resize_height_spin.pack(side="left", padx=(4, 2))
-        Label(resize_row2, text="px  适配").pack(side="left")
-        self.resize_fit_combo = ttk.Combobox(resize_row2, textvariable=self.resize_fit_mode, values=["stretch", "pad", "crop"], width=8, state="readonly")
-        self.resize_fit_combo.pack(side="left", padx=(4, 0))
-        self.resize_fit_combo.bind("<<ComboboxSelected>>", lambda _e: self.scan_jobs())
-        self.resize_fit_hint = Label(resize_row2, text="stretch=拉伸 / pad=等比留白 / crop=等比裁剪", fg="#666")
-        self.resize_fit_hint.pack(side="left", padx=(8, 0))
-        self.resize_controls.extend([self.resize_width_spin, self.resize_height_spin, self.resize_fit_combo])
-
-        compress_box = LabelFrame(opts, text="智能压缩", font=("Microsoft YaHei UI", 9, "bold"))
-        compress_box.pack(fill="x", padx=8, pady=3)
-        compress_row = Frame(compress_box)
-        compress_row.pack(fill="x", padx=8, pady=5)
-        Radiobutton(compress_row, text="固定质量", variable=self.compression_mode, value="quality", command=self._update_control_states).pack(side="left")
-        self.quality_spin = ttk.Spinbox(compress_row, from_=1, to=100, textvariable=self.quality, width=6)
-        self.quality_spin.pack(side="left", padx=(4, 2))
-        Label(compress_row, text="%").pack(side="left")
-        Radiobutton(compress_row, text="目标体积", variable=self.compression_mode, value="target", command=self._update_control_states).pack(side="left", padx=(18, 0))
-        self.target_size_entry = Entry(compress_row, textvariable=self.target_size, width=9)
-        self.target_size_entry.pack(side="left", padx=(4, 2))
-        self.target_size_unit = Label(compress_row, text="KB")
-        self.target_size_unit.pack(side="left")
-        self.compression_hint = Label(compress_row, text="", fg="#9a6400")
-        self.compression_hint.pack(side="left", padx=(10, 0))
-
-        rename_box = LabelFrame(opts, text="批量重命名", font=("Microsoft YaHei UI", 9, "bold"))
-        rename_box.pack(fill="x", padx=8, pady=3)
-        rename_row = Frame(rename_box)
-        rename_row.pack(fill="x", padx=8, pady=(5, 2))
-        Label(rename_row, text="模板").pack(side="left")
-        Entry(rename_row, textvariable=self.rename_template, width=16).pack(side="left", padx=(4, 8))
-        Label(rename_row, text="前缀").pack(side="left")
-        Entry(rename_row, textvariable=self.rename_prefix, width=8).pack(side="left", padx=(4, 8))
-        Label(rename_row, text="后缀").pack(side="left")
-        Entry(rename_row, textvariable=self.rename_suffix, width=8).pack(side="left", padx=(4, 8))
-        Label(rename_row, text="序号").pack(side="left")
-        ttk.Spinbox(rename_row, from_=0, to=99999, textvariable=self.rename_start, width=6).pack(side="left", padx=(4, 0))
-        rename_replace_row = Frame(rename_box)
-        rename_replace_row.pack(fill="x", padx=8, pady=(2, 5))
-        Label(rename_replace_row, text="替换").pack(side="left")
-        Entry(rename_replace_row, textvariable=self.rename_find, width=14).pack(side="left", padx=(4, 8))
-        Label(rename_replace_row, text="为").pack(side="left")
-        Entry(rename_replace_row, textvariable=self.rename_replace, width=14).pack(side="left", padx=(4, 8))
-        Label(rename_replace_row, text="可用：{name} {parent} {index} {index2} {date}", fg="#666").pack(side="left")
-
-        watermark_box = LabelFrame(opts, text="批量水印", font=("Microsoft YaHei UI", 9, "bold"))
-        watermark_box.pack(fill="x", padx=8, pady=3)
-        watermark_row1 = Frame(watermark_box)
-        watermark_row1.pack(fill="x", padx=8, pady=(5, 2))
-        self.watermark_controls: list[object] = []
-        self.watermark_check = Checkbutton(watermark_row1, text="启用水印", variable=self.watermark_enabled, command=self._update_control_states)
-        self.watermark_check.pack(side="left")
-        self.watermark_text_radio = Radiobutton(watermark_row1, text="文字", variable=self.watermark_type, value="text", command=self._update_control_states)
-        self.watermark_text_radio.pack(side="left", padx=(10, 0))
-        self.watermark_text_entry = Entry(watermark_row1, textvariable=self.watermark_text, width=16)
-        self.watermark_text_entry.pack(side="left", padx=(4, 8))
-        self.watermark_logo_radio = Radiobutton(watermark_row1, text="Logo", variable=self.watermark_type, value="logo", command=self._update_control_states)
-        self.watermark_logo_radio.pack(side="left")
-        self.watermark_logo_button = Button(watermark_row1, text="选择Logo", command=self.choose_watermark_logo, width=10)
-        self.watermark_logo_button.pack(side="left", padx=(4, 0))
-        watermark_row2 = Frame(watermark_box)
-        watermark_row2.pack(fill="x", padx=8, pady=(2, 5))
-        Label(watermark_row2, text="位置").pack(side="left")
-        self.watermark_position_combo = ttk.Combobox(
-            watermark_row2,
-            textvariable=self.watermark_position,
-            values=["左上", "上中", "右上", "左中", "居中", "右中", "左下", "下中", "右下"],
-            width=6,
-            state="readonly",
-        )
-        self.watermark_position_combo.pack(side="left", padx=(4, 8))
-        Label(watermark_row2, text="透明").pack(side="left")
-        self.watermark_opacity_spin = ttk.Spinbox(watermark_row2, from_=1, to=100, textvariable=self.watermark_opacity, width=5)
-        self.watermark_opacity_spin.pack(side="left", padx=(4, 2))
-        Label(watermark_row2, text="%  边距").pack(side="left")
-        self.watermark_margin_spin = ttk.Spinbox(watermark_row2, from_=0, to=999, textvariable=self.watermark_margin, width=5)
-        self.watermark_margin_spin.pack(side="left", padx=(4, 2))
-        Label(watermark_row2, text="px  字号").pack(side="left")
-        self.watermark_font_spin = ttk.Spinbox(watermark_row2, from_=8, to=300, textvariable=self.watermark_font_size, width=5)
-        self.watermark_font_spin.pack(side="left", padx=(4, 2))
-        Label(watermark_row2, text="颜色").pack(side="left", padx=(8, 2))
-        self.watermark_color_entry = Entry(watermark_row2, textvariable=self.watermark_color, width=9)
-        self.watermark_color_entry.pack(side="left")
-        self.watermark_outline_check = Checkbutton(watermark_row2, text="描边", variable=self.watermark_outline)
-        self.watermark_outline_check.pack(side="left", padx=(8, 0))
-        self.watermark_shadow_check = Checkbutton(watermark_row2, text="阴影", variable=self.watermark_shadow)
-        self.watermark_shadow_check.pack(side="left", padx=(8, 0))
-        self.watermark_controls.extend([
-            self.watermark_text_radio, self.watermark_text_entry, self.watermark_logo_radio, self.watermark_logo_button,
-            self.watermark_position_combo, self.watermark_opacity_spin, self.watermark_margin_spin, self.watermark_font_spin,
-            self.watermark_color_entry, self.watermark_outline_check, self.watermark_shadow_check,
-        ])
-
-        danger_box = LabelFrame(opts, text="危险操作", font=("Microsoft YaHei UI", 9, "bold"))
-        danger_box.pack(fill="x", padx=8, pady=(3, 8))
-        danger_row = Frame(danger_box)
-        danger_row.pack(fill="x", padx=8, pady=5)
-        Checkbutton(danger_row, text="覆盖已存在文件", variable=self.overwrite, fg="#9a6400").pack(side="left")
-        Checkbutton(danger_row, text="成功后删除原图", variable=self.delete_originals, fg="#b42318", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(20, 0))
-
-        for var in (self.rename_template, self.rename_prefix, self.rename_suffix, self.rename_find, self.rename_replace, self.target_size):
-            var.trace_add("write", lambda *_args: self._schedule_scan())
-        for var in (self.rename_start, self.resize_width, self.resize_height):
-            var.trace_add("write", lambda *_args: self._schedule_scan())
-
-        preview = LabelFrame(main, text="预览", font=module_font)
-        preview.pack(fill="both", expand=True, pady=(8, 0))
+        preview = LabelFrame(content, text="预览", font=module_font)
         filter_row = Frame(preview)
         filter_row.pack(fill="x", padx=10, pady=(8, 0))
         Label(filter_row, text="格式").pack(side="left")
@@ -585,7 +467,7 @@ class ImageConverterApp:
         self.tree.bind("<Motion>", self._on_tree_motion)
         self.tree.bind("<Leave>", self._on_tree_leave)
         self.tree.tag_configure("hover", background="#eef6ff")
-        panes.add(tree_outer, minsize=380)
+        panes.add(tree_outer, minsize=360)
 
         grid_outer = Frame(panes)
         self.grid_canvas = Canvas(grid_outer, highlightthickness=0)
@@ -599,10 +481,199 @@ class ImageConverterApp:
         self.grid_canvas.bind("<Configure>", self._on_canvas_configure)
         self.grid_canvas.bind("<MouseWheel>", self._on_grid_mousewheel)
         self.grid_inner.bind("<MouseWheel>", self._on_grid_mousewheel)
-        panes.add(grid_outer, minsize=600)
+        panes.add(grid_outer, minsize=620)
+        content.add(preview, minsize=850)
+
+        settings_shell = LabelFrame(content, text="批量处理设置", font=module_font)
+        settings_scroll = Scrollbar(settings_shell)
+        settings_scroll.pack(side="right", fill="y")
+        self.settings_canvas = Canvas(settings_shell, highlightthickness=0, yscrollcommand=settings_scroll.set)
+        self.settings_canvas.pack(side="left", fill="both", expand=True)
+        settings_scroll.config(command=self.settings_canvas.yview)
+        opts = Frame(self.settings_canvas)
+        self.settings_window = self.settings_canvas.create_window((0, 0), window=opts, anchor="nw")
+        opts.bind("<Configure>", lambda _e: self.settings_canvas.configure(scrollregion=self.settings_canvas.bbox("all")))
+        self.settings_canvas.bind("<Configure>", lambda e: self.settings_canvas.itemconfigure(self.settings_window, width=e.width))
+        self.settings_canvas.bind("<MouseWheel>", lambda e: (self.settings_canvas.yview_scroll((-1 if e.delta > 0 else 1) * 3, "units"), "break")[1])
+        content.add(settings_shell, minsize=500)
+
+        preset_box = LabelFrame(opts, text="批量预设", font=("Microsoft YaHei UI", 9, "bold"))
+        preset_box.pack(fill="x", padx=8, pady=(6, 3))
+        preset_row = Frame(preset_box)
+        preset_row.pack(fill="x", padx=8, pady=5)
+        self.preset_combo = ttk.Combobox(preset_row, textvariable=self.preset_name, values=self._preset_names(), width=26, state="readonly")
+        self.preset_combo.pack(side="left", fill="x", expand=True)
+        self.preset_combo.bind("<<ComboboxSelected>>", lambda _e: self.apply_preset(self.preset_name.get()))
+        Button(preset_row, text="保存预设", command=self.save_current_preset, width=10).pack(side="left", padx=(8, 0))
+        Label(preset_box, textvariable=self.preset_summary, fg="#0b5cad", anchor="w", wraplength=390).pack(fill="x", padx=8, pady=(0, 6))
+
+        base_box = LabelFrame(opts, text="基础输出", font=("Microsoft YaHei UI", 9, "bold"))
+        base_box.pack(fill="x", padx=8, pady=3)
+        base_row1 = Frame(base_box)
+        base_row1.pack(fill="x", padx=8, pady=(5, 2))
+        Label(base_row1, text="输出格式").pack(side="left")
+        for label, value in [("JPG", "jpg"), ("PNG", "png"), ("WEBP", "webp")]:
+            Radiobutton(base_row1, text=label, variable=self.output_format, value=value, command=self._on_output_format_change).pack(side="left", padx=(10, 0))
+        self.progressive_check = Checkbutton(base_row1, text="仅 JPG 渐进式", variable=self.progressive_jpg)
+        self.progressive_check.pack(side="left", padx=(18, 0))
+        base_row2 = Frame(base_box)
+        base_row2.pack(fill="x", padx=8, pady=(2, 5))
+        self.alpha_label = Label(base_row2, text="转 JPG 时背景色")
+        self.alpha_label.pack(side="left")
+        self.alpha_entry = Entry(base_row2, textvariable=self.alpha_bg, width=10)
+        self.alpha_entry.pack(side="left", padx=(6, 0))
+        Checkbutton(base_row2, text="保留目录结构", variable=self.preserve_structure, command=self.scan_jobs).pack(side="left", padx=(18, 0))
+
+        resize_box = LabelFrame(opts, text="尺寸调整", font=("Microsoft YaHei UI", 9, "bold"))
+        resize_box.pack(fill="x", padx=8, pady=3)
+        resize_row1 = Frame(resize_box)
+        resize_row1.pack(fill="x", padx=8, pady=(5, 2))
+        for label, value in [("不改变尺寸", "none"), ("按比例缩放", "scale"), ("指定长宽", "exact")]:
+            Radiobutton(resize_row1, text=label, variable=self.resize_mode, value=value, command=self._on_resize_mode_change).pack(side="left", padx=(0, 10))
+        self.resize_none_row = Frame(resize_box)
+        self.resize_none_row.pack(fill="x", padx=8, pady=(2, 5))
+        self.resize_none_label = Label(self.resize_none_row, text="当前模式不会改变图片尺寸。", fg="#666")
+        self.resize_none_label.pack(side="left")
+        self.resize_scale_row = Frame(resize_box)
+        Label(self.resize_scale_row, text="比例").pack(side="left")
+        self.resize_scale_spin = ttk.Spinbox(self.resize_scale_row, from_=1, to=500, textvariable=self.resize_scale_percent, width=7)
+        self.resize_scale_spin.pack(side="left", padx=(4, 2))
+        Label(self.resize_scale_row, text="%").pack(side="left")
+        self.resize_exact_row = Frame(resize_box)
+        Label(self.resize_exact_row, text="宽").pack(side="left")
+        self.resize_width_spin = ttk.Spinbox(self.resize_exact_row, from_=0, to=20000, textvariable=self.resize_width, width=7)
+        self.resize_width_spin.pack(side="left", padx=(4, 2))
+        Label(self.resize_exact_row, text="px  高").pack(side="left")
+        self.resize_height_spin = ttk.Spinbox(self.resize_exact_row, from_=0, to=20000, textvariable=self.resize_height, width=7)
+        self.resize_height_spin.pack(side="left", padx=(4, 2))
+        Label(self.resize_exact_row, text="px").pack(side="left")
+        resize_fit_row = Frame(resize_box)
+        self.resize_fit_row = resize_fit_row
+        Label(resize_fit_row, text="适配").pack(side="left")
+        self.resize_fit_combo = ttk.Combobox(resize_fit_row, textvariable=self.resize_fit_mode, values=["stretch", "pad", "crop"], width=8, state="readonly")
+        self.resize_fit_combo.pack(side="left", padx=(4, 0))
+        self.resize_fit_combo.bind("<<ComboboxSelected>>", lambda _e: self.scan_jobs())
+        self.resize_fit_hint = Label(resize_fit_row, text="stretch=拉伸 / pad=等比留白 / crop=等比裁剪", fg="#666")
+        self.resize_fit_hint.pack(side="left", padx=(8, 0))
+
+        compress_box = LabelFrame(opts, text="智能压缩", font=("Microsoft YaHei UI", 9, "bold"))
+        compress_box.pack(fill="x", padx=8, pady=3)
+        compress_row = Frame(compress_box)
+        compress_row.pack(fill="x", padx=8, pady=5)
+        Radiobutton(compress_row, text="固定质量", variable=self.compression_mode, value="quality", command=self._update_control_states).pack(side="left")
+        self.quality_spin = ttk.Spinbox(compress_row, from_=1, to=100, textvariable=self.quality, width=6)
+        self.quality_spin.pack(side="left", padx=(4, 2))
+        Label(compress_row, text="%").pack(side="left")
+        Radiobutton(compress_row, text="目标体积", variable=self.compression_mode, value="target", command=self._update_control_states).pack(side="left", padx=(18, 0))
+        self.target_size_entry = Entry(compress_row, textvariable=self.target_size, width=9)
+        self.target_size_entry.pack(side="left", padx=(4, 2))
+        self.target_size_unit = Label(compress_row, text="KB")
+        self.target_size_unit.pack(side="left")
+        self.compression_hint = Label(compress_row, text="", fg="#9a6400")
+        self.compression_hint.pack(side="left", padx=(10, 0))
+
+        rename_box = LabelFrame(opts, text="批量重命名", font=("Microsoft YaHei UI", 9, "bold"))
+        rename_box.pack(fill="x", padx=8, pady=3)
+        rename_row = Frame(rename_box)
+        rename_row.pack(fill="x", padx=8, pady=(5, 2))
+        Label(rename_row, text="模板").pack(side="left")
+        Entry(rename_row, textvariable=self.rename_template, width=24).pack(side="left", padx=(4, 8))
+        Label(rename_row, text="可用：{name} {parent} {index} {index2} {index3} {date}", fg="#666").pack(side="left")
+        rename_affix_row = Frame(rename_box)
+        rename_affix_row.pack(fill="x", padx=8, pady=(2, 2))
+        Label(rename_affix_row, text="前缀").pack(side="left")
+        Entry(rename_affix_row, textvariable=self.rename_prefix, width=12).pack(side="left", padx=(4, 12))
+        Label(rename_affix_row, text="后缀").pack(side="left")
+        Entry(rename_affix_row, textvariable=self.rename_suffix, width=12).pack(side="left", padx=(4, 12))
+        Label(rename_affix_row, text="起始序号").pack(side="left")
+        ttk.Spinbox(rename_affix_row, from_=0, to=99999, textvariable=self.rename_start, width=7).pack(side="left", padx=(4, 0))
+        rename_replace_row = Frame(rename_box)
+        rename_replace_row.pack(fill="x", padx=8, pady=(2, 5))
+        Label(rename_replace_row, text="替换").pack(side="left")
+        Entry(rename_replace_row, textvariable=self.rename_find, width=18).pack(side="left", padx=(4, 8))
+        Label(rename_replace_row, text="为").pack(side="left")
+        Entry(rename_replace_row, textvariable=self.rename_replace, width=18).pack(side="left", padx=(4, 8))
+
+        watermark_box = LabelFrame(opts, text="批量水印", font=("Microsoft YaHei UI", 9, "bold"))
+        watermark_box.pack(fill="x", padx=8, pady=3)
+        watermark_row1 = Frame(watermark_box)
+        watermark_row1.pack(fill="x", padx=8, pady=(5, 2))
+        self.watermark_common_controls: list[object] = []
+        self.watermark_text_controls: list[object] = []
+        self.watermark_logo_controls: list[object] = []
+        self.watermark_check = Checkbutton(watermark_row1, text="启用水印", variable=self.watermark_enabled, command=self._update_control_states)
+        self.watermark_check.pack(side="left")
+        self.watermark_text_radio = Radiobutton(watermark_row1, text="文字", variable=self.watermark_type, value="text", command=self._update_control_states)
+        self.watermark_text_radio.pack(side="left", padx=(10, 0))
+        self.watermark_logo_radio = Radiobutton(watermark_row1, text="Logo", variable=self.watermark_type, value="logo", command=self._update_control_states)
+        self.watermark_logo_radio.pack(side="left", padx=(8, 0))
+        watermark_text_row = Frame(watermark_box)
+        watermark_text_row.pack(fill="x", padx=8, pady=(2, 2))
+        Label(watermark_text_row, text="文字").pack(side="left")
+        self.watermark_text_entry = Entry(watermark_text_row, textvariable=self.watermark_text, width=34)
+        self.watermark_text_entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        watermark_logo_row = Frame(watermark_box)
+        watermark_logo_row.pack(fill="x", padx=8, pady=(2, 2))
+        Label(watermark_logo_row, text="Logo").pack(side="left")
+        self.watermark_logo_button = Button(watermark_row1, text="选择Logo", command=self.choose_watermark_logo, width=10)
+        self.watermark_logo_button.pack_forget()
+        self.watermark_logo_button = Button(watermark_logo_row, text="选择Logo", command=self.choose_watermark_logo, width=10)
+        self.watermark_logo_button.pack(side="left", padx=(4, 0))
+        Label(watermark_logo_row, textvariable=self.watermark_logo, fg="#666", anchor="w").pack(side="left", fill="x", expand=True, padx=(8, 0))
+        watermark_row2 = Frame(watermark_box)
+        watermark_row2.pack(fill="x", padx=8, pady=(2, 2))
+        Label(watermark_row2, text="位置").pack(side="left")
+        self.watermark_position_combo = ttk.Combobox(
+            watermark_row2,
+            textvariable=self.watermark_position,
+            values=["左上", "上中", "右上", "左中", "居中", "右中", "左下", "下中", "右下"],
+            width=6,
+            state="readonly",
+        )
+        self.watermark_position_combo.pack(side="left", padx=(4, 8))
+        Label(watermark_row2, text="透明").pack(side="left")
+        self.watermark_opacity_spin = ttk.Spinbox(watermark_row2, from_=1, to=100, textvariable=self.watermark_opacity, width=5)
+        self.watermark_opacity_spin.pack(side="left", padx=(4, 2))
+        Label(watermark_row2, text="%  边距").pack(side="left")
+        self.watermark_margin_spin = ttk.Spinbox(watermark_row2, from_=0, to=999, textvariable=self.watermark_margin, width=5)
+        self.watermark_margin_spin.pack(side="left", padx=(4, 2))
+        Label(watermark_row2, text="px").pack(side="left")
+        watermark_text_style_row = Frame(watermark_box)
+        watermark_text_style_row.pack(fill="x", padx=8, pady=(2, 5))
+        Label(watermark_text_style_row, text="字号").pack(side="left")
+        self.watermark_font_spin = ttk.Spinbox(watermark_text_style_row, from_=8, to=300, textvariable=self.watermark_font_size, width=5)
+        self.watermark_font_spin.pack(side="left", padx=(4, 8))
+        Label(watermark_text_style_row, text="颜色").pack(side="left", padx=(0, 2))
+        self.watermark_color_entry = Entry(watermark_text_style_row, textvariable=self.watermark_color, width=9)
+        self.watermark_color_entry.pack(side="left")
+        self.watermark_outline_check = Checkbutton(watermark_text_style_row, text="描边", variable=self.watermark_outline)
+        self.watermark_outline_check.pack(side="left", padx=(8, 0))
+        self.watermark_shadow_check = Checkbutton(watermark_text_style_row, text="阴影", variable=self.watermark_shadow)
+        self.watermark_shadow_check.pack(side="left", padx=(8, 0))
+        self.watermark_common_controls.extend([
+            self.watermark_text_radio, self.watermark_logo_radio, self.watermark_position_combo,
+            self.watermark_opacity_spin, self.watermark_margin_spin,
+        ])
+        self.watermark_text_controls.extend([
+            self.watermark_text_entry, self.watermark_font_spin, self.watermark_color_entry,
+            self.watermark_outline_check, self.watermark_shadow_check,
+        ])
+        self.watermark_logo_controls.append(self.watermark_logo_button)
+
+        danger_box = LabelFrame(opts, text="危险操作", font=("Microsoft YaHei UI", 9, "bold"))
+        danger_box.pack(fill="x", padx=8, pady=(3, 8))
+        danger_row = Frame(danger_box)
+        danger_row.pack(fill="x", padx=8, pady=5)
+        Checkbutton(danger_row, text="覆盖已存在文件", variable=self.overwrite, fg="#9a6400").pack(side="left")
+        Checkbutton(danger_row, text="成功后删除原图", variable=self.delete_originals, fg="#b42318", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(20, 0))
+
+        for var in (self.rename_template, self.rename_prefix, self.rename_suffix, self.rename_find, self.rename_replace, self.target_size):
+            var.trace_add("write", lambda *_args: self._schedule_scan())
+        for var in (self.rename_start, self.resize_width, self.resize_height, self.resize_scale_percent):
+            var.trace_add("write", lambda *_args: self._schedule_scan())
 
         bottom = Frame(main)
-        bottom.pack(fill="x", pady=(10, 0))
+        bottom.pack(fill="x", pady=(8, 0))
         self.progress = ttk.Progressbar(bottom, mode="determinate")
         self.progress.pack(side="left", fill="x", expand=True)
         Button(
@@ -728,6 +799,10 @@ class ImageConverterApp:
         self._update_control_states()
         self.scan_jobs()
 
+    def _on_resize_mode_change(self) -> None:
+        self._update_control_states()
+        self.scan_jobs()
+
     def _update_control_states(self) -> None:
         out_format = self.output_format.get()
         is_jpg = out_format == "jpg"
@@ -744,24 +819,44 @@ class ImageConverterApp:
         self.target_size_unit.config(state=target_state)
         self.compression_hint.config(text="PNG仅做无损 optimize" if out_format == "png" else "")
 
-        resize_state = "normal" if self.resize_mode.get() in {"scale", "exact"} else "disabled"
-        fit_state = "readonly" if self.resize_mode.get() == "exact" else "disabled"
-        self.resize_width_spin.config(state=resize_state)
-        self.resize_height_spin.config(state=resize_state)
-        self.resize_fit_combo.config(state=fit_state)
+        for row in (self.resize_none_row, self.resize_scale_row, self.resize_exact_row, self.resize_fit_row):
+            row.pack_forget()
+        resize_mode = self.resize_mode.get()
+        if resize_mode == "scale":
+            self.resize_scale_row.pack(fill="x", padx=8, pady=(2, 5))
+            self.resize_scale_spin.config(state="normal")
+        elif resize_mode == "exact":
+            self.resize_exact_row.pack(fill="x", padx=8, pady=(2, 2))
+            self.resize_fit_row.pack(fill="x", padx=8, pady=(0, 5))
+            self.resize_width_spin.config(state="normal")
+            self.resize_height_spin.config(state="normal")
+            self.resize_fit_combo.config(state="readonly")
+        else:
+            self.resize_none_row.pack(fill="x", padx=8, pady=(2, 5))
+            self.resize_scale_spin.config(state="disabled")
+            self.resize_width_spin.config(state="disabled")
+            self.resize_height_spin.config(state="disabled")
+            self.resize_fit_combo.config(state="disabled")
 
-        watermark_state = "normal" if self.watermark_enabled.get() else "disabled"
-        combo_state = "readonly" if self.watermark_enabled.get() else "disabled"
-        for widget in self.watermark_controls:
+        watermark_enabled = self.watermark_enabled.get()
+        common_state = "normal" if watermark_enabled else "disabled"
+        common_combo_state = "readonly" if watermark_enabled else "disabled"
+        text_state = "normal" if watermark_enabled and self.watermark_type.get() == "text" else "disabled"
+        logo_state = "normal" if watermark_enabled and self.watermark_type.get() == "logo" else "disabled"
+        for widget in self.watermark_common_controls:
             if isinstance(widget, ttk.Combobox):
-                widget.config(state=combo_state)
+                widget.config(state=common_combo_state)
             else:
-                widget.config(state=watermark_state)
+                widget.config(state=common_state)
+        for widget in self.watermark_text_controls:
+            widget.config(state=text_state)
+        for widget in self.watermark_logo_controls:
+            widget.config(state=logo_state)
 
         if not HEIC_ENABLED:
-            self.heic_notice.set("当前环境未安装 HEIC 支持库；扫描到 HEIC 时会提示，安装 pillow-heif 后可转 JPG/PNG/WEBP。")
+            self.heic_notice.set("HEIC 需安装 pillow-heif")
         else:
-            self.heic_notice.set("HEIC/HEIF 输入已启用，可转换为 JPG / PNG / WEBP。")
+            self.heic_notice.set("")
 
     def choose_output(self) -> None:
         folder = filedialog.askdirectory(title="选择输出文件夹")
@@ -1292,6 +1387,14 @@ class ImageConverterApp:
                 return f"目标文件名无效：\n{job.target}"
         return ""
 
+    def _resize_report_text(self) -> str:
+        mode = self.resize_mode.get()
+        if mode == "scale":
+            return f"scale {self._safe_int_var(self.resize_scale_percent, 100)}%"
+        if mode == "exact":
+            return f"exact {self._safe_int_var(self.resize_width, 0)}x{self._safe_int_var(self.resize_height, 0)} {self.resize_fit_mode.get()}"
+        return "none"
+
     def _convert_worker(self, selected_jobs: list[ConvertJob]) -> None:
         ok = failed = skipped = 0
         unselected = len(self.jobs) - len(selected_jobs)
@@ -1300,7 +1403,7 @@ class ImageConverterApp:
             f"Image conversion report: {datetime.now():%Y-%m-%d %H:%M:%S}",
             f"Output format: {self.output_format.get()}",
             f"Compression mode: {self.compression_mode.get()}",
-            f"Resize: {self.resize_mode.get()} {self._safe_int_var(self.resize_width, 0)}x{self._safe_int_var(self.resize_height, 0)} {self.resize_fit_mode.get()}",
+            f"Resize: {self._resize_report_text()}",
             f"Total: {len(self.jobs)}",
             f"Selected: {len(selected_jobs)}",
             f"Unselected: {unselected}",
@@ -1368,20 +1471,13 @@ class ImageConverterApp:
         mode = self.resize_mode.get()
         target_w = max(0, self._safe_int_var(self.resize_width, 0))
         target_h = max(0, self._safe_int_var(self.resize_height, 0))
-        if mode == "none" or (target_w <= 0 and target_h <= 0):
+        if mode == "none":
             return im
         rgba = im.convert("RGBA")
         if mode == "scale":
-            if target_w <= 0:
-                ratio = target_h / rgba.height
-                target_w = max(1, int(rgba.width * ratio))
-            elif target_h <= 0:
-                ratio = target_w / rgba.width
-                target_h = max(1, int(rgba.height * ratio))
-            else:
-                ratio = min(target_w / rgba.width, target_h / rgba.height)
-                target_w = max(1, int(rgba.width * ratio))
-                target_h = max(1, int(rgba.height * ratio))
+            ratio = max(1, self._safe_int_var(self.resize_scale_percent, 100)) / 100
+            target_w = max(1, int(rgba.width * ratio))
+            target_h = max(1, int(rgba.height * ratio))
             return rgba.resize((target_w, target_h), Image.Resampling.LANCZOS)
         if mode != "exact" or target_w <= 0 or target_h <= 0:
             return rgba
