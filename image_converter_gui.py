@@ -202,7 +202,7 @@ class ImageConverterApp:
         self.rename_find = StringVar(value="")
         self.rename_replace = StringVar(value="")
         self.rename_replace_rules: list[tuple[str, str]] = []
-        self.rename_rules_summary = StringVar(value="额外规则 0 条")
+        self.rename_rules_summary = StringVar(value="更多替换 0 条")
         self.rename_start = IntVar(value=1)
         self.watermark_enabled = BooleanVar(value=False)
         self.watermark_type = StringVar(value="text")
@@ -628,7 +628,7 @@ class ImageConverterApp:
         Label(rename_replace_row, text="为").pack(side="left")
         self.rename_replace_entry = Entry(rename_replace_row, textvariable=self.rename_replace, width=18)
         self.rename_replace_entry.pack(side="left", padx=(4, 8))
-        self.rename_rules_button = Button(rename_replace_row, text="替换规则...", command=self.open_rename_rules_editor, width=12)
+        self.rename_rules_button = Button(rename_replace_row, text="更多替换...", command=self.open_rename_rules_editor, width=12)
         self.rename_rules_button.pack(side="left", padx=(4, 8))
         self.rename_rules_label = Label(rename_replace_row, textvariable=self.rename_rules_summary, fg="#0b5cad")
         self.rename_rules_label.pack(side="left")
@@ -920,14 +920,17 @@ class ImageConverterApp:
         return rules
 
     def _update_rename_rules_summary(self) -> None:
-        self.rename_rules_summary.set(f"额外规则 {len(self.rename_replace_rules)} 条")
+        self.rename_rules_summary.set(f"更多替换 {len(self.rename_replace_rules)} 条")
 
     def open_rename_rules_editor(self) -> None:
         win = Toplevel(self.root)
         win.title("批量替换规则")
         win.geometry("620x420")
         win.transient(self.root)
-        rules = list(self.rename_replace_rules)
+        rules: list[tuple[str, str]] = []
+        if self.rename_find.get():
+            rules.append((self.rename_find.get(), self.rename_replace.get()))
+        rules.extend(self.rename_replace_rules)
 
         top = Frame(win, padx=10, pady=10)
         top.pack(fill="both", expand=True)
@@ -952,6 +955,15 @@ class ImageConverterApp:
             for index, (find, repl) in enumerate(rules):
                 tree.insert("", "end", iid=str(index), values=(find, repl))
 
+        def load_selected(_event=None) -> None:
+            selected = tree.selection()
+            if not selected:
+                return
+            index = int(selected[0])
+            if 0 <= index < len(rules):
+                find_var.set(rules[index][0])
+                replace_var.set(rules[index][1])
+
         def add_rule() -> None:
             find = find_var.get()
             if not find:
@@ -961,6 +973,21 @@ class ImageConverterApp:
             find_var.set("")
             replace_var.set("")
             refresh()
+
+        def update_rule() -> None:
+            selected = tree.selection()
+            if not selected:
+                messagebox.showwarning("未选择规则", "请先选择要修改的规则。", parent=win)
+                return
+            find = find_var.get()
+            if not find:
+                messagebox.showwarning("缺少查找内容", "请先输入要查找的文本。", parent=win)
+                return
+            index = int(selected[0])
+            if 0 <= index < len(rules):
+                rules[index] = (find, replace_var.get())
+                refresh()
+                tree.selection_set(str(index))
 
         def remove_rule() -> None:
             selected = tree.selection()
@@ -984,12 +1011,20 @@ class ImageConverterApp:
             tree.selection_set(str(new_index))
 
         def save_rules() -> None:
-            self.rename_replace_rules = list(rules)
+            if rules:
+                self.rename_find.set(rules[0][0])
+                self.rename_replace.set(rules[0][1])
+                self.rename_replace_rules = list(rules[1:])
+            else:
+                self.rename_find.set("")
+                self.rename_replace.set("")
+                self.rename_replace_rules = []
             self._update_rename_rules_summary()
             self.scan_jobs()
             win.destroy()
 
         Button(form, text="添加", command=add_rule, width=8).pack(side="left")
+        Button(form, text="更新", command=update_rule, width=8).pack(side="left", padx=(6, 0))
         actions = Frame(top)
         actions.pack(fill="x", pady=(10, 0))
         Button(actions, text="删除", command=remove_rule, width=8).pack(side="left")
@@ -997,6 +1032,7 @@ class ImageConverterApp:
         Button(actions, text="下移", command=lambda: move_rule(1), width=8).pack(side="left", padx=(8, 0))
         Button(actions, text="取消", command=win.destroy, width=10).pack(side="right")
         Button(actions, text="保存规则", command=save_rules, width=12, bg="#0b5cad", fg="white").pack(side="right", padx=(0, 8))
+        tree.bind("<<TreeviewSelect>>", load_selected)
         refresh()
         win.update_idletasks()
         sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
