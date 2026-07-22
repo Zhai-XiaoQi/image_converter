@@ -14,6 +14,7 @@ from tkinter import (
     Button,
     Canvas,
     Checkbutton,
+    DoubleVar,
     Entry,
     Frame,
     IntVar,
@@ -150,8 +151,8 @@ class ImageConverterApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
         self.root.title("图片格式转换工具")
-        self.default_window_size = (1600, 960)
-        self.root.minsize(1280, 760)
+        self.default_window_size = (1900, 1040)
+        self.root.minsize(1500, 820)
 
         self.input_paths: list[Path] = []
         self.jobs: list[ConvertJob] = []
@@ -167,6 +168,7 @@ class ImageConverterApp:
         self.preview_after_id: str | None = None
         self.worker: threading.Thread | None = None
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.target_conflict_error = ""
 
         self.mode = StringVar(value="folder")
         self.output_format = StringVar(value="jpg")
@@ -202,8 +204,14 @@ class ImageConverterApp:
         self.watermark_color = StringVar(value="#ffffff")
         self.watermark_outline = BooleanVar(value=True)
         self.watermark_shadow = BooleanVar(value=True)
+        self.watermark_scale_percent = IntVar(value=100)
+        self.watermark_angle = IntVar(value=0)
+        self.watermark_custom_x = DoubleVar(value=-1.0)
+        self.watermark_custom_y = DoubleVar(value=-1.0)
         self.heic_notice = StringVar(value="")
         self.preset_summary = StringVar(value="选择预设后会自动回填格式、尺寸和处理规则。")
+        self.preview_zoom = IntVar(value=100)
+        self.preview_zoom_text = StringVar(value="100%")
         self.search_text = StringVar(value="")
         self.filter_jpg = BooleanVar(value=True)
         self.filter_png = BooleanVar(value=True)
@@ -226,10 +234,11 @@ class ImageConverterApp:
         self.root.after(120, self._drain_events)
 
     def _center_root(self) -> None:
-        width, height = self.default_window_size
         self.root.update_idletasks()
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
+        width = min(self.default_window_size[0], max(1280, screen_w - 24))
+        height = min(self.default_window_size[1], max(820, screen_h - 80))
         x = max(0, (screen_w - width) // 2)
         y = max(0, (screen_h - height) // 2)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
@@ -321,6 +330,10 @@ class ImageConverterApp:
             "watermark_color": self.watermark_color.get(),
             "watermark_outline": bool(self.watermark_outline.get()),
             "watermark_shadow": bool(self.watermark_shadow.get()),
+            "watermark_scale_percent": self._safe_int_var(self.watermark_scale_percent, 100),
+            "watermark_angle": self._safe_int_var(self.watermark_angle, 0),
+            "watermark_custom_x": float(self.watermark_custom_x.get()),
+            "watermark_custom_y": float(self.watermark_custom_y.get()),
         }
 
     @staticmethod
@@ -365,6 +378,10 @@ class ImageConverterApp:
         self.watermark_color.set(str(values.get("watermark_color", "#ffffff")))
         self.watermark_outline.set(bool(values.get("watermark_outline", True)))
         self.watermark_shadow.set(bool(values.get("watermark_shadow", True)))
+        self.watermark_scale_percent.set(int(values.get("watermark_scale_percent", 100)))
+        self.watermark_angle.set(int(values.get("watermark_angle", 0)))
+        self.watermark_custom_x.set(float(values.get("watermark_custom_x", -1.0)))
+        self.watermark_custom_y.set(float(values.get("watermark_custom_y", -1.0)))
         self.preset_summary.set(self._preset_summary_text(name))
         self._on_output_format_change()
         self._update_control_states()
@@ -398,7 +415,8 @@ class ImageConverterApp:
 
     def _build_ui(self) -> None:
         style = ttk.Style(self.root)
-        module_font = ("Microsoft YaHei UI", 11, "bold")
+        module_font = ("Microsoft YaHei UI", 12, "bold")
+        section_font = ("Microsoft YaHei UI", 10, "bold")
         style.configure("File.Treeview", font=("Microsoft YaHei UI", 12), rowheight=34)
         style.configure("File.Treeview.Heading", font=module_font)
         style.configure("TNotebook.Tab", font=("Microsoft YaHei UI", 12, "bold"), padding=(18, 8))
@@ -435,6 +453,7 @@ class ImageConverterApp:
         Button(out_row, text="打开输出目录", command=self.open_output_dir, width=14).pack(side="left", padx=(8, 0))
 
         content = PanedWindow(main, orient="horizontal", sashwidth=7)
+        self.content_panes = content
         content.pack(fill="both", expand=True)
 
         preview = LabelFrame(content, text="预览", font=module_font)
@@ -447,8 +466,14 @@ class ImageConverterApp:
         search_entry = Entry(filter_row, textvariable=self.search_text, width=34)
         search_entry.pack(side="left")
         Button(filter_row, text="清空", command=self._clear_search, width=8).pack(side="left", padx=(8, 0))
+        Button(filter_row, text="-", command=lambda: self._set_preview_zoom(self.preview_zoom.get() - 15), width=4).pack(side="right", padx=(6, 0))
+        Button(filter_row, text="+", command=lambda: self._set_preview_zoom(self.preview_zoom.get() + 15), width=4).pack(side="right", padx=(6, 0))
+        Button(filter_row, text="适应宽度", command=self._fit_preview_width, width=10).pack(side="right", padx=(10, 0))
+        Label(filter_row, textvariable=self.preview_zoom_text, fg="#0b5cad", font=("Microsoft YaHei UI", 10, "bold")).pack(side="right")
+        Label(filter_row, text="缩放").pack(side="right", padx=(24, 6))
         search_entry.bind("<KeyRelease>", lambda _e: self._schedule_scan())
         panes = PanedWindow(preview, orient="horizontal", sashwidth=6)
+        self.preview_panes = panes
         panes.pack(fill="both", expand=True, padx=10, pady=8)
 
         tree_outer = Frame(panes)
@@ -467,7 +492,7 @@ class ImageConverterApp:
         self.tree.bind("<Motion>", self._on_tree_motion)
         self.tree.bind("<Leave>", self._on_tree_leave)
         self.tree.tag_configure("hover", background="#eef6ff")
-        panes.add(tree_outer, minsize=360)
+        panes.add(tree_outer, minsize=390)
 
         grid_outer = Frame(panes)
         self.grid_canvas = Canvas(grid_outer, highlightthickness=0)
@@ -481,57 +506,52 @@ class ImageConverterApp:
         self.grid_canvas.bind("<Configure>", self._on_canvas_configure)
         self.grid_canvas.bind("<MouseWheel>", self._on_grid_mousewheel)
         self.grid_inner.bind("<MouseWheel>", self._on_grid_mousewheel)
-        panes.add(grid_outer, minsize=620)
-        content.add(preview, minsize=850)
+        panes.add(grid_outer, minsize=760)
+        content.add(preview, minsize=1050)
 
         settings_shell = LabelFrame(content, text="批量处理设置", font=module_font)
-        settings_scroll = Scrollbar(settings_shell)
-        settings_scroll.pack(side="right", fill="y")
-        self.settings_canvas = Canvas(settings_shell, highlightthickness=0, yscrollcommand=settings_scroll.set)
-        self.settings_canvas.pack(side="left", fill="both", expand=True)
-        settings_scroll.config(command=self.settings_canvas.yview)
-        opts = Frame(self.settings_canvas)
-        self.settings_window = self.settings_canvas.create_window((0, 0), window=opts, anchor="nw")
-        opts.bind("<Configure>", lambda _e: self.settings_canvas.configure(scrollregion=self.settings_canvas.bbox("all")))
-        self.settings_canvas.bind("<Configure>", lambda e: self.settings_canvas.itemconfigure(self.settings_window, width=e.width))
-        self.settings_canvas.bind("<MouseWheel>", lambda e: (self.settings_canvas.yview_scroll((-1 if e.delta > 0 else 1) * 3, "units"), "break")[1])
-        content.add(settings_shell, minsize=500)
+        opts = Frame(settings_shell)
+        opts.pack(fill="both", expand=True, padx=8, pady=8)
+        content.add(settings_shell, minsize=560)
 
-        preset_box = LabelFrame(opts, text="批量预设", font=("Microsoft YaHei UI", 9, "bold"))
-        preset_box.pack(fill="x", padx=8, pady=(6, 3))
+        preset_box = LabelFrame(opts, text="批量预设", font=section_font)
+        preset_box.pack(fill="x", pady=(0, 6))
         preset_row = Frame(preset_box)
-        preset_row.pack(fill="x", padx=8, pady=5)
+        preset_row.pack(fill="x", padx=10, pady=7)
         self.preset_combo = ttk.Combobox(preset_row, textvariable=self.preset_name, values=self._preset_names(), width=26, state="readonly")
         self.preset_combo.pack(side="left", fill="x", expand=True)
         self.preset_combo.bind("<<ComboboxSelected>>", lambda _e: self.apply_preset(self.preset_name.get()))
         Button(preset_row, text="保存预设", command=self.save_current_preset, width=10).pack(side="left", padx=(8, 0))
-        Label(preset_box, textvariable=self.preset_summary, fg="#0b5cad", anchor="w", wraplength=390).pack(fill="x", padx=8, pady=(0, 6))
+        Label(preset_box, textvariable=self.preset_summary, fg="#0b5cad", anchor="w", wraplength=500).pack(fill="x", padx=10, pady=(0, 7))
 
-        base_box = LabelFrame(opts, text="基础输出", font=("Microsoft YaHei UI", 9, "bold"))
-        base_box.pack(fill="x", padx=8, pady=3)
+        base_box = LabelFrame(opts, text="基础输出", font=section_font)
+        base_box.pack(fill="x", pady=6)
         base_row1 = Frame(base_box)
-        base_row1.pack(fill="x", padx=8, pady=(5, 2))
+        base_row1.pack(fill="x", padx=10, pady=(7, 4))
         Label(base_row1, text="输出格式").pack(side="left")
         for label, value in [("JPG", "jpg"), ("PNG", "png"), ("WEBP", "webp")]:
             Radiobutton(base_row1, text=label, variable=self.output_format, value=value, command=self._on_output_format_change).pack(side="left", padx=(10, 0))
         self.progressive_check = Checkbutton(base_row1, text="仅 JPG 渐进式", variable=self.progressive_jpg)
         self.progressive_check.pack(side="left", padx=(18, 0))
         base_row2 = Frame(base_box)
-        base_row2.pack(fill="x", padx=8, pady=(2, 5))
+        base_row2.pack(fill="x", padx=10, pady=(2, 7))
         self.alpha_label = Label(base_row2, text="转 JPG 时背景色")
         self.alpha_label.pack(side="left")
         self.alpha_entry = Entry(base_row2, textvariable=self.alpha_bg, width=10)
         self.alpha_entry.pack(side="left", padx=(6, 0))
         Checkbutton(base_row2, text="保留目录结构", variable=self.preserve_structure, command=self.scan_jobs).pack(side="left", padx=(18, 0))
 
-        resize_box = LabelFrame(opts, text="尺寸调整", font=("Microsoft YaHei UI", 9, "bold"))
-        resize_box.pack(fill="x", padx=8, pady=3)
+        size_compress_box = LabelFrame(opts, text="尺寸 / 压缩", font=section_font)
+        size_compress_box.pack(fill="x", pady=6)
+        resize_box = Frame(size_compress_box)
+        resize_box.pack(fill="x", padx=10, pady=(8, 2))
         resize_row1 = Frame(resize_box)
-        resize_row1.pack(fill="x", padx=8, pady=(5, 2))
+        resize_row1.pack(fill="x")
+        Label(resize_row1, text="尺寸").pack(side="left", padx=(0, 8))
         for label, value in [("不改变尺寸", "none"), ("按比例缩放", "scale"), ("指定长宽", "exact")]:
             Radiobutton(resize_row1, text=label, variable=self.resize_mode, value=value, command=self._on_resize_mode_change).pack(side="left", padx=(0, 10))
         self.resize_none_row = Frame(resize_box)
-        self.resize_none_row.pack(fill="x", padx=8, pady=(2, 5))
+        self.resize_none_row.pack(fill="x", pady=(4, 2))
         self.resize_none_label = Label(self.resize_none_row, text="当前模式不会改变图片尺寸。", fg="#666")
         self.resize_none_label.pack(side="left")
         self.resize_scale_row = Frame(resize_box)
@@ -556,10 +576,9 @@ class ImageConverterApp:
         self.resize_fit_hint = Label(resize_fit_row, text="stretch=拉伸 / pad=等比留白 / crop=等比裁剪", fg="#666")
         self.resize_fit_hint.pack(side="left", padx=(8, 0))
 
-        compress_box = LabelFrame(opts, text="智能压缩", font=("Microsoft YaHei UI", 9, "bold"))
-        compress_box.pack(fill="x", padx=8, pady=3)
-        compress_row = Frame(compress_box)
-        compress_row.pack(fill="x", padx=8, pady=5)
+        compress_row = Frame(size_compress_box)
+        compress_row.pack(fill="x", padx=10, pady=(4, 8))
+        Label(compress_row, text="压缩").pack(side="left", padx=(0, 8))
         Radiobutton(compress_row, text="固定质量", variable=self.compression_mode, value="quality", command=self._update_control_states).pack(side="left")
         self.quality_spin = ttk.Spinbox(compress_row, from_=1, to=100, textvariable=self.quality, width=6)
         self.quality_spin.pack(side="left", padx=(4, 2))
@@ -572,8 +591,8 @@ class ImageConverterApp:
         self.compression_hint = Label(compress_row, text="", fg="#9a6400")
         self.compression_hint.pack(side="left", padx=(10, 0))
 
-        rename_box = LabelFrame(opts, text="批量重命名", font=("Microsoft YaHei UI", 9, "bold"))
-        rename_box.pack(fill="x", padx=8, pady=3)
+        rename_box = LabelFrame(opts, text="批量重命名", font=section_font)
+        rename_box.pack(fill="x", pady=6)
         rename_row = Frame(rename_box)
         rename_row.pack(fill="x", padx=8, pady=(5, 2))
         Label(rename_row, text="模板").pack(side="left")
@@ -594,8 +613,8 @@ class ImageConverterApp:
         Label(rename_replace_row, text="为").pack(side="left")
         Entry(rename_replace_row, textvariable=self.rename_replace, width=18).pack(side="left", padx=(4, 8))
 
-        watermark_box = LabelFrame(opts, text="批量水印", font=("Microsoft YaHei UI", 9, "bold"))
-        watermark_box.pack(fill="x", padx=8, pady=3)
+        watermark_box = LabelFrame(opts, text="批量水印", font=section_font)
+        watermark_box.pack(fill="x", pady=6)
         watermark_row1 = Frame(watermark_box)
         watermark_row1.pack(fill="x", padx=8, pady=(5, 2))
         self.watermark_common_controls: list[object] = []
@@ -603,6 +622,8 @@ class ImageConverterApp:
         self.watermark_logo_controls: list[object] = []
         self.watermark_check = Checkbutton(watermark_row1, text="启用水印", variable=self.watermark_enabled, command=self._update_control_states)
         self.watermark_check.pack(side="left")
+        self.watermark_preview_button = Button(watermark_row1, text="预览/编辑水印", command=self.open_watermark_editor, width=14)
+        self.watermark_preview_button.pack(side="right")
         self.watermark_text_radio = Radiobutton(watermark_row1, text="文字", variable=self.watermark_type, value="text", command=self._update_control_states)
         self.watermark_text_radio.pack(side="left", padx=(10, 0))
         self.watermark_logo_radio = Radiobutton(watermark_row1, text="Logo", variable=self.watermark_type, value="logo", command=self._update_control_states)
@@ -631,6 +652,7 @@ class ImageConverterApp:
             state="readonly",
         )
         self.watermark_position_combo.pack(side="left", padx=(4, 8))
+        self.watermark_position_combo.bind("<<ComboboxSelected>>", lambda _e: self._clear_custom_watermark_position())
         Label(watermark_row2, text="透明").pack(side="left")
         self.watermark_opacity_spin = ttk.Spinbox(watermark_row2, from_=1, to=100, textvariable=self.watermark_opacity, width=5)
         self.watermark_opacity_spin.pack(side="left", padx=(4, 2))
@@ -638,6 +660,12 @@ class ImageConverterApp:
         self.watermark_margin_spin = ttk.Spinbox(watermark_row2, from_=0, to=999, textvariable=self.watermark_margin, width=5)
         self.watermark_margin_spin.pack(side="left", padx=(4, 2))
         Label(watermark_row2, text="px").pack(side="left")
+        Label(watermark_row2, text="  缩放").pack(side="left")
+        self.watermark_scale_spin = ttk.Spinbox(watermark_row2, from_=5, to=500, textvariable=self.watermark_scale_percent, width=5)
+        self.watermark_scale_spin.pack(side="left", padx=(4, 2))
+        Label(watermark_row2, text="%  角度").pack(side="left")
+        self.watermark_angle_spin = ttk.Spinbox(watermark_row2, from_=-180, to=180, textvariable=self.watermark_angle, width=5)
+        self.watermark_angle_spin.pack(side="left", padx=(4, 2))
         watermark_text_style_row = Frame(watermark_box)
         watermark_text_style_row.pack(fill="x", padx=8, pady=(2, 5))
         Label(watermark_text_style_row, text="字号").pack(side="left")
@@ -652,7 +680,7 @@ class ImageConverterApp:
         self.watermark_shadow_check.pack(side="left", padx=(8, 0))
         self.watermark_common_controls.extend([
             self.watermark_text_radio, self.watermark_logo_radio, self.watermark_position_combo,
-            self.watermark_opacity_spin, self.watermark_margin_spin,
+            self.watermark_opacity_spin, self.watermark_margin_spin, self.watermark_scale_spin, self.watermark_angle_spin,
         ])
         self.watermark_text_controls.extend([
             self.watermark_text_entry, self.watermark_font_spin, self.watermark_color_entry,
@@ -660,8 +688,8 @@ class ImageConverterApp:
         ])
         self.watermark_logo_controls.append(self.watermark_logo_button)
 
-        danger_box = LabelFrame(opts, text="危险操作", font=("Microsoft YaHei UI", 9, "bold"))
-        danger_box.pack(fill="x", padx=8, pady=(3, 8))
+        danger_box = LabelFrame(opts, text="危险操作", font=section_font)
+        danger_box.pack(fill="x", pady=(6, 0))
         danger_row = Frame(danger_box)
         danger_row.pack(fill="x", padx=8, pady=5)
         Checkbutton(danger_row, text="覆盖已存在文件", variable=self.overwrite, fg="#9a6400").pack(side="left")
@@ -676,7 +704,7 @@ class ImageConverterApp:
         bottom.pack(fill="x", pady=(8, 0))
         self.progress = ttk.Progressbar(bottom, mode="determinate")
         self.progress.pack(side="left", fill="x", expand=True)
-        Button(
+        self.start_button = Button(
             bottom,
             text="开始转换",
             command=self.start_convert,
@@ -686,7 +714,8 @@ class ImageConverterApp:
             activebackground="#084a8d",
             activeforeground="white",
             font=("Microsoft YaHei UI", 10, "bold"),
-        ).pack(side="left", padx=(10, 0), ipady=2)
+        )
+        self.start_button.pack(side="left", padx=(10, 0), ipady=2)
         self.status_frame = Frame(main)
         self.status_frame.pack(fill="x", pady=(8, 0))
         self._set_status_message("请选择图片或文件夹。")
@@ -694,6 +723,7 @@ class ImageConverterApp:
             self._enable_batch_drop(drop_widget)
         self._build_single_editor_tab(module_font)
         self._on_output_format_change()
+        self.root.after(220, self._set_initial_panes)
         self._bind_shortcuts()
 
     def _bind_shortcuts(self) -> None:
@@ -734,6 +764,35 @@ class ImageConverterApp:
             if highlight:
                 options.update({"fg": "#0b5cad", "font": self.status_number_font})
             Label(self.status_frame, **options).pack(side="left")
+
+    def _update_start_button_state(self) -> None:
+        if not hasattr(self, "start_button"):
+            return
+        state = "disabled" if self.target_conflict_error else "normal"
+        self.start_button.config(state=state)
+
+    def _set_initial_panes(self) -> None:
+        try:
+            total = self.content_panes.winfo_width()
+            if total > 0:
+                self.content_panes.sash_place(0, int(total * 0.70), 0)
+            preview_total = self.preview_panes.winfo_width()
+            if preview_total > 0:
+                self.preview_panes.sash_place(0, int(preview_total * 0.32), 0)
+        except Exception:
+            pass
+
+    def _set_preview_zoom(self, value: int) -> None:
+        value = max(60, min(180, int(value)))
+        self.preview_zoom.set(value)
+        self.preview_zoom_text.set(f"{value}%")
+        self._populate_grid()
+
+    def _fit_preview_width(self) -> None:
+        width = max(360, self.grid_canvas.winfo_width())
+        target_columns = 2 if width >= 560 else 1
+        zoom = int((width / target_columns) / 320 * 100)
+        self._set_preview_zoom(zoom)
 
     def _shortcut_save_single(self, _event) -> str | None:
         if self.notebook.index("current") == 1 and self.single_editor:
@@ -789,6 +848,12 @@ class ImageConverterApp:
         )
         if path:
             self.watermark_logo.set(path)
+            self.watermark_custom_x.set(-1.0)
+            self.watermark_custom_y.set(-1.0)
+
+    def _clear_custom_watermark_position(self) -> None:
+        self.watermark_custom_x.set(-1.0)
+        self.watermark_custom_y.set(-1.0)
 
     def _on_output_format_change(self) -> None:
         is_jpg = self.output_format.get() == "jpg"
@@ -852,6 +917,8 @@ class ImageConverterApp:
             widget.config(state=text_state)
         for widget in self.watermark_logo_controls:
             widget.config(state=logo_state)
+        if hasattr(self, "watermark_preview_button"):
+            self.watermark_preview_button.config(state=common_state)
 
         if not HEIC_ENABLED:
             self.heic_notice.set("HEIC 需安装 pillow-heif")
@@ -881,16 +948,48 @@ class ImageConverterApp:
         out.mkdir(parents=True, exist_ok=True)
         os.startfile(out)  # type: ignore[attr-defined]
 
+    def open_watermark_editor(self) -> None:
+        selected = next((job for job in self.jobs if job.selected), None)
+        if not selected:
+            messagebox.showwarning("没有样图", "请先在预览区勾选一张图片。")
+            return
+        if self.watermark_type.get() == "logo" and not Path(self.watermark_logo.get().strip()).exists():
+            messagebox.showwarning("没有 Logo", "请先选择水印 Logo 文件。")
+            return
+        if self.watermark_type.get() == "text" and not self.watermark_text.get().strip():
+            messagebox.showwarning("没有文字", "请先输入文字水印内容。")
+            return
+        try:
+            base = self._prepare_watermark_preview_image(selected.source)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("无法预览", str(exc))
+            return
+        WatermarkEditor(self, base, selected.source)
+
+    def _prepare_watermark_preview_image(self, source: Path) -> Image.Image:
+        if source.suffix.lower() in {".heic", ".heif"} and not HEIC_ENABLED:
+            raise ValueError("当前环境未安装 HEIC 支持库，无法预览 HEIC/HEIF 图片")
+        bg = self._parse_color(self.alpha_bg.get())
+        with Image.open(source) as im:
+            im = self._resize_image(im, bg)
+            if self.output_format.get() == "jpg":
+                im = self._flatten_alpha(im, bg)
+            return im.convert("RGBA")
+
     def scan_jobs(self) -> None:
         for job in self.jobs:
             self.selection_state[self._source_key(job.source)] = job.selected
         self.jobs.clear()
         self._clear_preview()
         if not self.input_paths:
+            self.target_conflict_error = ""
+            self._update_start_button_state()
             self._set_status_message("请选择输入。")
             return
         out_root = Path(self.output_text.get().strip()) if self.output_text.get().strip() else None
         if not out_root:
+            self.target_conflict_error = ""
+            self._update_start_button_state()
             self._set_status_message("请选择输出目录。")
             return
         base_root = self._base_root()
@@ -906,9 +1005,12 @@ class ImageConverterApp:
             selected = self.selection_state.get(self._source_key(src), True)
             self.jobs.append(ConvertJob(src, target, selected=selected))
             visible_index += 1
+        self._auto_resolve_same_stem_extension_conflicts()
+        self.target_conflict_error = self._selected_target_error()
         self._populate_tree()
         self._populate_grid()
         self._update_selected_status()
+        self._update_start_button_state()
         self.progress.config(value=0, maximum=max(1, len(self.jobs)))
 
     @staticmethod
@@ -923,6 +1025,71 @@ class ImageConverterApp:
         if self.preserve_structure.get() and base_root and src.is_relative_to(base_root):
             return (out_root / src.relative_to(base_root)).with_name(stem + output_ext)
         return out_root / (stem + output_ext)
+
+    def _selected_target_error(self) -> str:
+        return self._target_error_for_jobs([job for job in self.jobs if job.selected])
+
+    def _target_error_for_jobs(self, jobs: list[ConvertJob]) -> str:
+        seen: dict[str, ConvertJob] = {}
+        conflicts: list[tuple[ConvertJob, ConvertJob]] = []
+        invalids: list[ConvertJob] = []
+        for job in jobs:
+            if not job.target.name or any(ch in job.target.name for ch in INVALID_FILENAME_CHARS):
+                invalids.append(job)
+                continue
+            key = self._target_key(job.target)
+            previous = seen.get(key)
+            if previous:
+                conflicts.append((previous, job))
+            else:
+                seen[key] = job
+        if invalids:
+            return f"目标文件名无效：{invalids[0].target.name}"
+        if conflicts:
+            first, second = conflicts[0]
+            return f"仍有目标文件冲突：{first.source.name} 与 {second.source.name} -> {first.target.name}"
+        return ""
+
+    def _auto_resolve_same_stem_extension_conflicts(self) -> None:
+        changed = True
+        while changed:
+            changed = False
+            groups: dict[str, list[ConvertJob]] = {}
+            for job in self.jobs:
+                groups.setdefault(self._target_key(job.target), []).append(job)
+            for group in groups.values():
+                if len(group) < 2:
+                    continue
+                if not self._can_suffix_by_source_extension(group):
+                    continue
+                used = {self._target_key(job.target) for job in self.jobs if job not in group}
+                for job in group:
+                    suffix = job.source.suffix.lower().lstrip(".") or "file"
+                    base_target = job.target.with_name(f"{job.target.stem}_{suffix}{job.target.suffix}")
+                    target = base_target
+                    counter = 2
+                    while self._target_key(target) in used:
+                        target = base_target.with_name(f"{base_target.stem}_{counter}{base_target.suffix}")
+                        counter += 1
+                    used.add(self._target_key(target))
+                    if self._target_key(target) != self._target_key(job.target):
+                        job.target = target
+                        changed = True
+
+    @staticmethod
+    def _can_suffix_by_source_extension(jobs: list[ConvertJob]) -> bool:
+        source_stems = {job.source.stem.lower() for job in jobs}
+        source_parents = {str(job.source.parent.resolve()).lower() for job in jobs}
+        target_parents = {str(job.target.parent.resolve()).lower() for job in jobs}
+        suffixes = [job.source.suffix.lower().lstrip(".") for job in jobs]
+        return len(source_stems) == 1 and len(source_parents) == 1 and len(target_parents) == 1 and len(set(suffixes)) == len(suffixes)
+
+    @staticmethod
+    def _target_key(target: Path) -> str:
+        try:
+            return str(target.resolve()).lower()
+        except OSError:
+            return str(target).lower()
 
     def _renamed_stem(self, src: Path, index: int) -> str:
         template = self.rename_template.get().strip() or "{name}"
@@ -1081,6 +1248,10 @@ class ImageConverterApp:
         self.grid_canvas.configure(scrollregion=(0, 0, 0, 0))
 
     def _create_card(self, idx: int, job: ConvertJob) -> None:
+        zoom = max(60, min(180, self.preview_zoom.get())) / 100
+        thumb_size = (max(120, int(176 * zoom)), max(86, int(126 * zoom)))
+        image_size = (thumb_size[0] + 8, thumb_size[1] + 6)
+        text_width = max(18, int(25 * zoom))
         var = BooleanVar(value=job.selected)
         self.card_vars[idx] = var
         card = Frame(self.grid_inner, bd=1, relief="solid", padx=8, pady=8, bg="#f5f5f5")
@@ -1089,17 +1260,17 @@ class ImageConverterApp:
         top.pack(fill="x")
         Checkbutton(top, variable=var, command=lambda i=idx: self._set_job_selected(i, self.card_vars[i].get()), bg="#f5f5f5", activebackground="#eaf3ff").pack(side="left")
         Button(top, text="编辑", command=lambda i=idx: self.load_single_image(self.jobs[i].source), width=6).pack(side="right")
-        thumb = self._get_thumbnail(job.source, (176, 126))
-        image_label = Label(card, image=thumb, width=184, height=132, bg="#f7f7f4")
+        thumb = self._get_thumbnail(job.source, thumb_size)
+        image_label = Label(card, image=thumb, width=image_size[0], height=image_size[1], bg="#f7f7f4")
         image_label.image = thumb  # type: ignore[attr-defined]
         image_label.pack(fill="x", pady=(4, 0))
         rel = self._display_source_rel(job.source)
-        name_label = Label(card, text=rel.name, width=25, anchor="center", bg="#f5f5f5")
+        name_label = Label(card, text=rel.name, width=text_width, anchor="center", bg="#f5f5f5")
         name_label.pack(pady=(4, 0))
         parent = str(rel.parent) if str(rel.parent) != "." else "(根目录)"
-        parent_label = Label(card, text=parent, width=25, anchor="center", fg="#666", bg="#f5f5f5")
+        parent_label = Label(card, text=parent, width=text_width, anchor="center", fg="#666", bg="#f5f5f5")
         parent_label.pack()
-        target_label = Label(card, text=f"-> {job.target.name}", width=25, anchor="center", fg="#0b5cad", bg="#f5f5f5")
+        target_label = Label(card, text=f"-> {job.target.name}", width=text_width, anchor="center", fg="#0b5cad", bg="#f5f5f5")
         target_label.pack()
         card.bind("<Button-1>", lambda _e, i=idx: self._schedule_card_preview(i))
         self._bind_card_hover(card)
@@ -1194,7 +1365,8 @@ class ImageConverterApp:
     def _layout_cards(self, reset_scroll: bool = False) -> None:
         self.layout_after_id = None
         width = max(360, self.grid_canvas.winfo_width(), self.grid_canvas.winfo_reqwidth())
-        card_width = 320
+        zoom = max(60, min(180, self.preview_zoom.get())) / 100
+        card_width = max(220, int(320 * zoom))
         columns = max(1, width // card_width)
         actual_width = max(280, width // columns)
         for column in range(max(columns, 12)):
@@ -1296,6 +1468,8 @@ class ImageConverterApp:
         self._refresh_all_selection_views()
 
     def _refresh_all_selection_views(self) -> None:
+        self.target_conflict_error = self._selected_target_error()
+        self._update_start_button_state()
         self._refresh_folder_states()
         self._populate_grid()
         self._update_selected_status()
@@ -1328,6 +1502,13 @@ class ImageConverterApp:
         return bool(states) and all(states)
 
     def _update_selected_status(self) -> None:
+        if self.target_conflict_error:
+            self._set_status_parts([
+                ("目标文件冲突：", False),
+                (self.target_conflict_error, True),
+                ("。请调整重命名规则。", False),
+            ])
+            return
         selected = sum(1 for job in self.jobs if job.selected)
         self._set_status_parts([
             ("已扫描 ", False),
@@ -1352,6 +1533,9 @@ class ImageConverterApp:
     def start_convert(self) -> None:
         if self.worker and self.worker.is_alive():
             messagebox.showinfo("正在转换", "转换任务正在运行。")
+            return
+        if self.target_conflict_error:
+            messagebox.showerror("目标文件冲突", f"{self.target_conflict_error}\n\n请调整重命名规则后再转换。")
             return
         selected_jobs = [job for job in self.jobs if job.selected]
         if not selected_jobs:
@@ -1503,17 +1687,26 @@ class ImageConverterApp:
             return im
         base = im.convert("RGBA")
         layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        mark = self._make_watermark_mark(base.size)
+        if mark is None:
+            return im
+        x, y = self._watermark_position(base.size, mark.size, max(0, self._safe_int_var(self.watermark_margin, 24)))
+        layer.alpha_composite(mark, (x, y))
+        base.alpha_composite(layer)
+        return base
+
+    def _make_watermark_mark(self, base_size: tuple[int, int]) -> Image.Image | None:
         opacity = max(1, min(100, self._safe_int_var(self.watermark_opacity, 45)))
         alpha = int(255 * opacity / 100)
-        margin = max(0, self._safe_int_var(self.watermark_margin, 24))
+        scale = max(5, min(500, self._safe_int_var(self.watermark_scale_percent, 100))) / 100
         if self.watermark_type.get() == "logo":
             logo_path = Path(self.watermark_logo.get().strip())
             if not logo_path.exists():
                 raise ValueError("水印 Logo 文件不存在")
             with Image.open(logo_path) as logo:
                 mark = logo.convert("RGBA")
-                max_w = max(1, base.width // 4)
-                max_h = max(1, base.height // 4)
+                max_w = max(1, int(base_size[0] * 0.25 * scale))
+                max_h = max(1, int(base_size[1] * 0.25 * scale))
                 mark.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
                 if alpha < 255:
                     mark_alpha = mark.getchannel("A").point(lambda value: int(value * alpha / 255))
@@ -1521,8 +1714,8 @@ class ImageConverterApp:
         else:
             text = self.watermark_text.get().strip()
             if not text:
-                return im
-            font_size = max(8, self._safe_int_var(self.watermark_font_size, 36))
+                return None
+            font_size = max(8, int(self._safe_int_var(self.watermark_font_size, 36) * scale))
             try:
                 font = ImageFont.truetype("msyh.ttc", font_size)
             except OSError:
@@ -1541,14 +1734,21 @@ class ImageConverterApp:
                 for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                     mark_draw.text((text_pos[0] + dx, text_pos[1] + dy), text, fill=(0, 0, 0, alpha), font=font)
             mark_draw.text(text_pos, text, fill=color, font=font)
-        x, y = self._watermark_position(base.size, mark.size, margin)
-        layer.alpha_composite(mark, (x, y))
-        base.alpha_composite(layer)
-        return base
+        angle = self._safe_int_var(self.watermark_angle, 0)
+        if angle:
+            mark = mark.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
+        return mark
 
     def _watermark_position(self, base_size: tuple[int, int], mark_size: tuple[int, int], margin: int) -> tuple[int, int]:
         bw, bh = base_size
         mw, mh = mark_size
+        custom_x = float(self.watermark_custom_x.get())
+        custom_y = float(self.watermark_custom_y.get())
+        if custom_x >= 0 and custom_y >= 0:
+            return (
+                max(0, min(bw - mw, int((bw - mw) * custom_x))),
+                max(0, min(bh - mh, int((bh - mh) * custom_y))),
+            )
         mapping = {
             "左上": (margin, margin),
             "上中": ((bw - mw) // 2, margin),
@@ -1858,6 +2058,166 @@ class ImageConverterApp:
         except queue.Empty:
             pass
         self.root.after(120, self._drain_events)
+
+
+class WatermarkEditor:
+    def __init__(self, app: ImageConverterApp, base_image: Image.Image, source: Path) -> None:
+        self.app = app
+        self.base_image = base_image.convert("RGBA")
+        self.source = source
+        self.original = {
+            "enabled": app.watermark_enabled.get(),
+            "opacity": app.watermark_opacity.get(),
+            "scale": app.watermark_scale_percent.get(),
+            "angle": app.watermark_angle.get(),
+            "custom_x": app.watermark_custom_x.get(),
+            "custom_y": app.watermark_custom_y.get(),
+        }
+        self.saved = False
+        self.drag_mode: str | None = None
+        self.drag_start = (0, 0)
+        self.start_scale = app.watermark_scale_percent.get()
+        self.display_scale = 1.0
+        self.display_offset = (0, 0)
+        self.mark_box = (0, 0, 0, 0)
+        self.photo: ImageTk.PhotoImage | None = None
+
+        self.window = Toplevel(app.root)
+        self.window.title(f"预览/编辑水印 - {source.name}")
+        self.window.geometry("1120x820")
+        self.window.minsize(900, 680)
+        self.window.transient(app.root)
+        self.window.protocol("WM_DELETE_WINDOW", self._cancel)
+
+        top = Frame(self.window, padx=10, pady=8)
+        top.pack(fill="x")
+        Label(top, text=f"样图：{source.name}    输出尺寸：{self.base_image.width} x {self.base_image.height}", font=("Microsoft YaHei UI", 10, "bold")).pack(side="left")
+
+        controls = Frame(self.window, padx=10)
+        controls.pack(fill="x")
+        Label(controls, text="不透明").pack(side="left")
+        Scale(controls, from_=1, to=100, orient="horizontal", variable=app.watermark_opacity, command=lambda _v: self._render(), length=150).pack(side="left", padx=(4, 16))
+        Label(controls, text="缩放").pack(side="left")
+        Scale(controls, from_=5, to=500, orient="horizontal", variable=app.watermark_scale_percent, command=lambda _v: self._render(), length=150).pack(side="left", padx=(4, 16))
+        Label(controls, text="角度").pack(side="left")
+        Scale(controls, from_=-180, to=180, orient="horizontal", variable=app.watermark_angle, command=lambda _v: self._render(), length=180).pack(side="left", padx=(4, 16))
+        Button(controls, text="重置到九宫格位置", command=self._reset_position, width=16).pack(side="left")
+
+        self.canvas = Canvas(self.window, bg="#202020", highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True, padx=10, pady=10)
+        self.canvas.bind("<Configure>", lambda _e: self._render())
+        self.canvas.bind("<ButtonPress-1>", self._start_drag)
+        self.canvas.bind("<B1-Motion>", self._drag)
+        self.canvas.bind("<ButtonRelease-1>", lambda _e: self._render())
+
+        bottom = Frame(self.window, padx=10)
+        bottom.pack(fill="x", pady=(0, 10))
+        Label(bottom, text="拖动水印调整位置；拖动右下角绿色点调整大小；滑块可调整不透明度和角度。", fg="#555").pack(side="left")
+        Button(bottom, text="取消", command=self._cancel, width=10).pack(side="right")
+        Button(bottom, text="保存水印设置", command=self._save, width=14, bg="#0b5cad", fg="white", activebackground="#084a8d", activeforeground="white").pack(side="right", padx=(0, 8))
+
+        self._center()
+        self._render()
+
+    def _center(self) -> None:
+        self.window.update_idletasks()
+        w = self.window.winfo_width()
+        h = self.window.winfo_height()
+        sw = self.window.winfo_screenwidth()
+        sh = self.window.winfo_screenheight()
+        self.window.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
+
+    def _compose(self) -> tuple[Image.Image, Image.Image | None, tuple[int, int]]:
+        base = self.base_image.copy()
+        mark = self.app._make_watermark_mark(base.size)
+        if mark is None:
+            return base, None, (0, 0)
+        x, y = self.app._watermark_position(base.size, mark.size, max(0, self.app._safe_int_var(self.app.watermark_margin, 24)))
+        layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        layer.alpha_composite(mark, (x, y))
+        base.alpha_composite(layer)
+        return base, mark, (x, y)
+
+    def _render(self) -> None:
+        if self.canvas.winfo_width() < 10:
+            return
+        composed, mark, xy = self._compose()
+        max_w = max(1, self.canvas.winfo_width() - 24)
+        max_h = max(1, self.canvas.winfo_height() - 24)
+        scale = min(max_w / composed.width, max_h / composed.height, 1.0)
+        display_size = (max(1, int(composed.width * scale)), max(1, int(composed.height * scale)))
+        display = composed.convert("RGB").resize(display_size, Image.Resampling.LANCZOS)
+        self.photo = ImageTk.PhotoImage(display)
+        ox = (self.canvas.winfo_width() - display_size[0]) // 2
+        oy = (self.canvas.winfo_height() - display_size[1]) // 2
+        self.display_scale = scale
+        self.display_offset = (ox, oy)
+        self.canvas.delete("all")
+        self.canvas.create_image(ox, oy, image=self.photo, anchor="nw")
+        if mark:
+            x, y = xy
+            x1 = ox + int(x * scale)
+            y1 = oy + int(y * scale)
+            x2 = ox + int((x + mark.width) * scale)
+            y2 = oy + int((y + mark.height) * scale)
+            self.mark_box = (x1, y1, x2, y2)
+            self.canvas.create_rectangle(x1, y1, x2, y2, outline="#00d084", width=2)
+            self.canvas.create_rectangle(x2 - 8, y2 - 8, x2 + 8, y2 + 8, fill="#00d084", outline="#00d084")
+
+    def _start_drag(self, event) -> None:
+        x1, y1, x2, y2 = self.mark_box
+        if x2 - 14 <= event.x <= x2 + 14 and y2 - 14 <= event.y <= y2 + 14:
+            self.drag_mode = "scale"
+        elif x1 <= event.x <= x2 and y1 <= event.y <= y2:
+            self.drag_mode = "move"
+        else:
+            self.drag_mode = None
+            return
+        self.drag_start = (event.x, event.y)
+        self.start_scale = self.app.watermark_scale_percent.get()
+
+    def _drag(self, event) -> None:
+        if not self.drag_mode:
+            return
+        mark = self.app._make_watermark_mark(self.base_image.size)
+        if mark is None:
+            return
+        if self.drag_mode == "scale":
+            delta = event.x - self.drag_start[0] + event.y - self.drag_start[1]
+            self.app.watermark_scale_percent.set(max(5, min(500, int(self.start_scale + delta / 2))))
+            self._render()
+            return
+        ox, oy = self.display_offset
+        scale = max(self.display_scale, 0.0001)
+        x = int((event.x - ox) / scale - mark.width / 2)
+        y = int((event.y - oy) / scale - mark.height / 2)
+        max_x = max(1, self.base_image.width - mark.width)
+        max_y = max(1, self.base_image.height - mark.height)
+        self.app.watermark_custom_x.set(max(0.0, min(1.0, x / max_x)))
+        self.app.watermark_custom_y.set(max(0.0, min(1.0, y / max_y)))
+        self._render()
+
+    def _reset_position(self) -> None:
+        self.app.watermark_custom_x.set(-1.0)
+        self.app.watermark_custom_y.set(-1.0)
+        self._render()
+
+    def _save(self) -> None:
+        self.app.watermark_enabled.set(True)
+        self.app._update_control_states()
+        self.saved = True
+        self.window.destroy()
+
+    def _cancel(self) -> None:
+        if not self.saved:
+            self.app.watermark_enabled.set(bool(self.original["enabled"]))
+            self.app.watermark_opacity.set(int(self.original["opacity"]))
+            self.app.watermark_scale_percent.set(int(self.original["scale"]))
+            self.app.watermark_angle.set(int(self.original["angle"]))
+            self.app.watermark_custom_x.set(float(self.original["custom_x"]))
+            self.app.watermark_custom_y.set(float(self.original["custom_y"]))
+            self.app._update_control_states()
+        self.window.destroy()
 
 
 class ImageEditorWindow:
