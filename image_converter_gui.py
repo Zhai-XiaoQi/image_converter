@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import queue
 import re
+import io
+import json
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,15 +28,88 @@ from tkinter import (
     Tk,
     filedialog,
     messagebox,
+    simpledialog,
 )
 from tkinter import font as tkfont
 from tkinter import ttk
 
-from PIL import Image, ImageDraw, ImageGrab, ImageTk
+from PIL import Image, ImageDraw, ImageFont, ImageGrab, ImageTk
+
+try:
+    import pillow_heif  # type: ignore[import-not-found]
+
+    pillow_heif.register_heif_opener()
+    HEIC_ENABLED = True
+except Exception:
+    HEIC_ENABLED = False
 
 
-SUPPORTED_INPUTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+SUPPORTED_INPUTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"}
 SKIP_DIR_NAMES = {"渐进式JPG", "AI_language_check_contact_sheets", "AI_language_text_check_sheets", "AI_language_category_sheets"}
+PRESETS_FILE = Path(__file__).with_name("image_converter_presets.json")
+INVALID_FILENAME_CHARS = r'<>:"/\|?*'
+DEFAULT_PRESETS = {
+    "Amazon主图优化": {
+        "output_format": "jpg",
+        "quality": 92,
+        "progressive_jpg": True,
+        "preserve_structure": True,
+        "alpha_bg": "#ffffff",
+        "target_size": "",
+        "rename_template": "{name}",
+        "rename_prefix": "",
+        "rename_suffix": "",
+        "rename_find": "",
+        "rename_replace": "",
+        "rename_start": 1,
+        "watermark_enabled": False,
+    },
+    "A+桌面图": {
+        "output_format": "jpg",
+        "quality": 92,
+        "progressive_jpg": True,
+        "preserve_structure": True,
+        "alpha_bg": "#ffffff",
+        "target_size": "",
+        "rename_template": "{name}",
+        "rename_prefix": "",
+        "rename_suffix": "",
+        "rename_find": "",
+        "rename_replace": "",
+        "rename_start": 1,
+        "watermark_enabled": False,
+    },
+    "移动A+": {
+        "output_format": "jpg",
+        "quality": 92,
+        "progressive_jpg": True,
+        "preserve_structure": True,
+        "alpha_bg": "#ffffff",
+        "target_size": "",
+        "rename_template": "{name}",
+        "rename_prefix": "",
+        "rename_suffix": "",
+        "rename_find": "",
+        "rename_replace": "",
+        "rename_start": 1,
+        "watermark_enabled": False,
+    },
+    "WebP网页图": {
+        "output_format": "webp",
+        "quality": 85,
+        "progressive_jpg": False,
+        "preserve_structure": True,
+        "alpha_bg": "#ffffff",
+        "target_size": "",
+        "rename_template": "{name}",
+        "rename_prefix": "",
+        "rename_suffix": "",
+        "rename_find": "",
+        "rename_replace": "",
+        "rename_start": 1,
+        "watermark_enabled": False,
+    },
+}
 
 
 @dataclass
@@ -76,6 +151,22 @@ class ImageConverterApp:
         self.overwrite = BooleanVar(value=False)
         self.delete_originals = BooleanVar(value=False)
         self.alpha_bg = StringVar(value="#ffffff")
+        self.preset_name = StringVar(value="自定义")
+        self.presets: dict[str, dict[str, object]] = {}
+        self.target_size = StringVar(value="")
+        self.rename_template = StringVar(value="{name}")
+        self.rename_prefix = StringVar(value="")
+        self.rename_suffix = StringVar(value="")
+        self.rename_find = StringVar(value="")
+        self.rename_replace = StringVar(value="")
+        self.rename_start = IntVar(value=1)
+        self.watermark_enabled = BooleanVar(value=False)
+        self.watermark_type = StringVar(value="text")
+        self.watermark_text = StringVar(value="")
+        self.watermark_logo = StringVar(value="")
+        self.watermark_position = StringVar(value="右下")
+        self.watermark_opacity = IntVar(value=45)
+        self.watermark_margin = IntVar(value=24)
         self.search_text = StringVar(value="")
         self.filter_jpg = BooleanVar(value=True)
         self.filter_png = BooleanVar(value=True)
@@ -91,6 +182,7 @@ class ImageConverterApp:
         self.status_text = StringVar(value="请选择图片或文件夹。")
         self.status_number_font = ("Microsoft YaHei UI", 9, "bold")
 
+        self._load_presets()
         self._build_ui()
         self._build_tree_icons()
         self._center_root()
@@ -104,6 +196,91 @@ class ImageConverterApp:
         x = max(0, (screen_w - width) // 2)
         y = max(0, (screen_h - height) // 2)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _load_presets(self) -> None:
+        self.presets = {name: values.copy() for name, values in DEFAULT_PRESETS.items()}
+        if not PRESETS_FILE.exists():
+            return
+        try:
+            loaded = json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if isinstance(loaded, dict):
+            for name, values in loaded.items():
+                if isinstance(name, str) and isinstance(values, dict):
+                    self.presets[name] = values
+
+    def _preset_names(self) -> list[str]:
+        return ["自定义", *sorted(self.presets.keys())]
+
+    def _capture_preset(self) -> dict[str, object]:
+        return {
+            "output_format": self.output_format.get(),
+            "quality": self._safe_int_var(self.quality, 92),
+            "progressive_jpg": bool(self.progressive_jpg.get()),
+            "preserve_structure": bool(self.preserve_structure.get()),
+            "alpha_bg": self.alpha_bg.get(),
+            "target_size": self.target_size.get(),
+            "rename_template": self.rename_template.get(),
+            "rename_prefix": self.rename_prefix.get(),
+            "rename_suffix": self.rename_suffix.get(),
+            "rename_find": self.rename_find.get(),
+            "rename_replace": self.rename_replace.get(),
+            "rename_start": self._safe_int_var(self.rename_start, 1),
+            "watermark_enabled": bool(self.watermark_enabled.get()),
+            "watermark_type": self.watermark_type.get(),
+            "watermark_text": self.watermark_text.get(),
+            "watermark_logo": self.watermark_logo.get(),
+            "watermark_position": self.watermark_position.get(),
+            "watermark_opacity": self._safe_int_var(self.watermark_opacity, 45),
+            "watermark_margin": self._safe_int_var(self.watermark_margin, 24),
+        }
+
+    @staticmethod
+    def _safe_int_var(var: IntVar, default: int) -> int:
+        try:
+            return int(var.get())
+        except Exception:
+            return default
+
+    def apply_preset(self, name: str) -> None:
+        values = self.presets.get(name)
+        if not values:
+            return
+        self.output_format.set(str(values.get("output_format", "jpg")))
+        self.quality.set(int(values.get("quality", 92)))
+        self.progressive_jpg.set(bool(values.get("progressive_jpg", False)))
+        self.preserve_structure.set(bool(values.get("preserve_structure", True)))
+        self.alpha_bg.set(str(values.get("alpha_bg", "#ffffff")))
+        self.target_size.set(str(values.get("target_size", "")))
+        self.rename_template.set(str(values.get("rename_template", "{name}")))
+        self.rename_prefix.set(str(values.get("rename_prefix", "")))
+        self.rename_suffix.set(str(values.get("rename_suffix", "")))
+        self.rename_find.set(str(values.get("rename_find", "")))
+        self.rename_replace.set(str(values.get("rename_replace", "")))
+        self.rename_start.set(int(values.get("rename_start", 1)))
+        self.watermark_enabled.set(bool(values.get("watermark_enabled", False)))
+        self.watermark_type.set(str(values.get("watermark_type", "text")))
+        self.watermark_text.set(str(values.get("watermark_text", "")))
+        self.watermark_logo.set(str(values.get("watermark_logo", "")))
+        self.watermark_position.set(str(values.get("watermark_position", "右下")))
+        self.watermark_opacity.set(int(values.get("watermark_opacity", 45)))
+        self.watermark_margin.set(int(values.get("watermark_margin", 24)))
+        self._on_output_format_change()
+
+    def save_current_preset(self) -> None:
+        name = simpledialog.askstring("保存预设", "请输入预设名称：", initialvalue=self.preset_name.get() if self.preset_name.get() != "自定义" else "")
+        if not name:
+            return
+        name = name.strip()
+        if not name or name == "自定义":
+            messagebox.showwarning("名称无效", "请使用有效的预设名称。")
+            return
+        self.presets[name] = self._capture_preset()
+        PRESETS_FILE.write_text(json.dumps(self.presets, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.preset_name.set(name)
+        self.preset_combo.config(values=self._preset_names())
+        messagebox.showinfo("已保存", f"预设已保存：{name}")
 
     def _build_ui(self) -> None:
         style = ttk.Style(self.root)
@@ -144,8 +321,17 @@ class ImageConverterApp:
 
         opts = LabelFrame(settings_area, text="转换设置", font=module_font)
         opts.pack(side="right", fill="both", padx=(8, 0))
+        preset_row = Frame(opts)
+        preset_row.pack(fill="x", padx=10, pady=(6, 4))
+        Label(preset_row, text="处理预设").pack(side="left")
+        self.preset_combo = ttk.Combobox(preset_row, textvariable=self.preset_name, values=self._preset_names(), width=18, state="readonly")
+        self.preset_combo.pack(side="left", padx=(8, 0))
+        self.preset_combo.bind("<<ComboboxSelected>>", lambda _e: self.apply_preset(self.preset_name.get()))
+        Button(preset_row, text="保存预设", command=self.save_current_preset, width=10).pack(side="left", padx=(8, 0))
+        if not HEIC_ENABLED:
+            Label(preset_row, text="HEIC需安装支持库", fg="#9a6400").pack(side="left", padx=(10, 0))
         row1 = Frame(opts)
-        row1.pack(fill="x", padx=10, pady=(6, 4))
+        row1.pack(fill="x", padx=10, pady=(4, 4))
         Label(row1, text="输出格式").pack(side="left")
         for label, value in [("JPG", "jpg"), ("PNG", "png"), ("WEBP", "webp")]:
             Radiobutton(row1, text=label, variable=self.output_format, value=value, command=self._on_output_format_change).pack(side="left", padx=(10, 0))
@@ -154,14 +340,57 @@ class ImageConverterApp:
         self.progressive_check = Checkbutton(row1, text="仅 JPG 渐进式", variable=self.progressive_jpg)
         self.progressive_check.pack(side="left", padx=(18, 0))
         Checkbutton(row1, text="保留目录结构", variable=self.preserve_structure, command=self.scan_jobs).pack(side="left", padx=(18, 0))
+        Label(row1, text="目标体积").pack(side="left", padx=(18, 4))
+        target_size_entry = Entry(row1, textvariable=self.target_size, width=9)
+        target_size_entry.pack(side="left")
+        target_size_entry.bind("<KeyRelease>", lambda _e: self._schedule_scan())
         row2 = Frame(opts)
-        row2.pack(fill="x", padx=10, pady=(4, 6))
+        row2.pack(fill="x", padx=10, pady=(4, 4))
         self.alpha_label = Label(row2, text="转 JPG 时背景色")
         self.alpha_label.pack(side="left")
         self.alpha_entry = Entry(row2, textvariable=self.alpha_bg, width=10)
         self.alpha_entry.pack(side="left", padx=(6, 0))
         Checkbutton(row2, text="覆盖已存在文件", variable=self.overwrite, fg="#9a6400").pack(side="left", padx=(20, 0))
         Checkbutton(row2, text="成功后删除原图", variable=self.delete_originals, fg="#b42318", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(20, 0))
+        rename_row = Frame(opts)
+        rename_row.pack(fill="x", padx=10, pady=(4, 4))
+        Label(rename_row, text="命名").pack(side="left")
+        Entry(rename_row, textvariable=self.rename_template, width=14).pack(side="left", padx=(6, 0))
+        Label(rename_row, text="前缀").pack(side="left", padx=(10, 2))
+        Entry(rename_row, textvariable=self.rename_prefix, width=8).pack(side="left")
+        Label(rename_row, text="后缀").pack(side="left", padx=(8, 2))
+        Entry(rename_row, textvariable=self.rename_suffix, width=8).pack(side="left")
+        Label(rename_row, text="序号").pack(side="left", padx=(8, 2))
+        ttk.Spinbox(rename_row, from_=0, to=99999, textvariable=self.rename_start, width=6).pack(side="left")
+        rename_replace_row = Frame(opts)
+        rename_replace_row.pack(fill="x", padx=10, pady=(0, 4))
+        Label(rename_replace_row, text="替换").pack(side="left")
+        Entry(rename_replace_row, textvariable=self.rename_find, width=14).pack(side="left", padx=(6, 0))
+        Label(rename_replace_row, text="为").pack(side="left", padx=(8, 2))
+        Entry(rename_replace_row, textvariable=self.rename_replace, width=14).pack(side="left")
+        Label(rename_replace_row, text="可用：{name} {parent} {index} {date}", fg="#666").pack(side="left", padx=(10, 0))
+        for var in (self.rename_template, self.rename_prefix, self.rename_suffix, self.rename_find, self.rename_replace, self.target_size):
+            var.trace_add("write", lambda *_args: self._schedule_scan())
+        self.rename_start.trace_add("write", lambda *_args: self._schedule_scan())
+        watermark_row = Frame(opts)
+        watermark_row.pack(fill="x", padx=10, pady=(4, 8))
+        Checkbutton(watermark_row, text="水印", variable=self.watermark_enabled).pack(side="left")
+        Radiobutton(watermark_row, text="文字", variable=self.watermark_type, value="text").pack(side="left", padx=(8, 0))
+        Entry(watermark_row, textvariable=self.watermark_text, width=16).pack(side="left", padx=(4, 0))
+        Radiobutton(watermark_row, text="Logo", variable=self.watermark_type, value="logo").pack(side="left", padx=(8, 0))
+        Button(watermark_row, text="选择Logo", command=self.choose_watermark_logo, width=10).pack(side="left", padx=(4, 0))
+        self.watermark_position_combo = ttk.Combobox(
+            watermark_row,
+            textvariable=self.watermark_position,
+            values=["左上", "上中", "右上", "左中", "居中", "右中", "左下", "下中", "右下"],
+            width=6,
+            state="readonly",
+        )
+        self.watermark_position_combo.pack(side="left", padx=(8, 0))
+        Label(watermark_row, text="透明").pack(side="left", padx=(8, 2))
+        ttk.Spinbox(watermark_row, from_=1, to=100, textvariable=self.watermark_opacity, width=5).pack(side="left")
+        Label(watermark_row, text="边距").pack(side="left", padx=(8, 2))
+        ttk.Spinbox(watermark_row, from_=0, to=999, textvariable=self.watermark_margin, width=5).pack(side="left")
 
         preview = LabelFrame(main, text="预览", font=module_font)
         preview.pack(fill="both", expand=True, pady=(8, 0))
@@ -310,7 +539,7 @@ class ImageConverterApp:
     def choose_files_input(self) -> None:
         files = filedialog.askopenfilenames(
             title="选择图片",
-            filetypes=[("Image files", "*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff"), ("All files", "*.*")],
+            filetypes=[("Image files", "*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff *.heic *.heif"), ("All files", "*.*")],
         )
         if files:
             self.mode.set("files")
@@ -319,6 +548,14 @@ class ImageConverterApp:
             if not self.output_text.get():
                 self.output_text.set(str(self.input_paths[0].parent / "converted_images"))
             self.scan_jobs()
+
+    def choose_watermark_logo(self) -> None:
+        path = filedialog.askopenfilename(
+            title="选择水印 Logo",
+            filetypes=[("Image files", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff"), ("All files", "*.*")],
+        )
+        if path:
+            self.watermark_logo.set(path)
 
     def _on_output_format_change(self) -> None:
         is_jpg = self.output_format.get() == "jpg"
@@ -364,18 +601,54 @@ class ImageConverterApp:
             return
         base_root = self._base_root()
         output_ext = "." + self.output_format.get()
+        try:
+            visible_index = int(self.rename_start.get())
+        except Exception:
+            visible_index = 1
         for src in self._collect_sources(out_root):
             if not self._matches_filters(src):
                 continue
-            if self.preserve_structure.get() and base_root and src.is_relative_to(base_root):
-                target = out_root / src.relative_to(base_root).with_suffix(output_ext)
-            else:
-                target = out_root / src.with_suffix(output_ext).name
+            target = self._build_target_path(src, out_root, base_root, output_ext, visible_index)
             self.jobs.append(ConvertJob(src, target))
+            visible_index += 1
         self._populate_tree()
         self._populate_grid()
         self._update_selected_status()
         self.progress.config(value=0, maximum=max(1, len(self.jobs)))
+
+    def _build_target_path(self, src: Path, out_root: Path, base_root: Path | None, output_ext: str, index: int) -> Path:
+        stem = self._renamed_stem(src, index)
+        if self.preserve_structure.get() and base_root and src.is_relative_to(base_root):
+            return (out_root / src.relative_to(base_root)).with_name(stem + output_ext)
+        return out_root / (stem + output_ext)
+
+    def _renamed_stem(self, src: Path, index: int) -> str:
+        template = self.rename_template.get().strip() or "{name}"
+        date_text = datetime.now().strftime("%Y%m%d")
+        parent = src.parent.name
+        values = {
+            "name": src.stem,
+            "parent": parent,
+            "index": str(index),
+            "index2": f"{index:02d}",
+            "index3": f"{index:03d}",
+            "date": date_text,
+        }
+        try:
+            stem = template.format(**values)
+        except Exception:
+            stem = src.stem
+        stem = f"{self.rename_prefix.get()}{stem}{self.rename_suffix.get()}"
+        find = self.rename_find.get()
+        if find:
+            stem = stem.replace(find, self.rename_replace.get())
+        return self._sanitize_stem(stem) or src.stem
+
+    @staticmethod
+    def _sanitize_stem(stem: str) -> str:
+        cleaned = "".join("_" if ch in INVALID_FILENAME_CHARS else ch for ch in stem).strip().rstrip(".")
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        return cleaned[:180]
 
     def _matches_filters(self, src: Path) -> bool:
         ext = src.suffix.lower()
@@ -523,9 +796,11 @@ class ImageConverterApp:
         parent = str(rel.parent) if str(rel.parent) != "." else "(根目录)"
         parent_label = Label(card, text=parent, width=25, anchor="center", fg="#666", bg="#f5f5f5")
         parent_label.pack()
+        target_label = Label(card, text=f"-> {job.target.name}", width=25, anchor="center", fg="#0b5cad", bg="#f5f5f5")
+        target_label.pack()
         card.bind("<Button-1>", lambda _e, i=idx: self._schedule_card_preview(i))
         self._bind_card_hover(card)
-        for clickable in (image_label, name_label, parent_label):
+        for clickable in (image_label, name_label, parent_label, target_label):
             clickable.bind("<Button-1>", lambda _e, i=idx: self._schedule_card_preview(i))
         image_label.bind("<Double-Button-1>", lambda _e, i=idx: self._open_card_editor(i))
         for widget in [card, top, image_label, *card.winfo_children()]:
@@ -589,11 +864,18 @@ class ImageConverterApp:
         cached = self.thumb_cache.get(key)
         if cached:
             return cached
-        with Image.open(path) as im:
-            im = im.convert("RGB")
-            im.thumbnail(size, Image.Resampling.LANCZOS)
-            canvas = Image.new("RGB", size, (247, 247, 244))
-            canvas.paste(im, ((size[0] - im.width) // 2, (size[1] - im.height) // 2))
+        canvas = Image.new("RGB", size, (247, 247, 244))
+        try:
+            if path.suffix.lower() in {".heic", ".heif"} and not HEIC_ENABLED:
+                raise ValueError("HEIC未启用")
+            with Image.open(path) as im:
+                im = im.convert("RGB")
+                im.thumbnail(size, Image.Resampling.LANCZOS)
+                canvas.paste(im, ((size[0] - im.width) // 2, (size[1] - im.height) // 2))
+        except Exception:
+            draw = ImageDraw.Draw(canvas)
+            draw.rectangle((10, 10, size[0] - 10, size[1] - 10), outline="#b42318", width=2)
+            draw.text((18, size[1] // 2 - 8), "无法预览", fill="#b42318")
         photo = ImageTk.PhotoImage(canvas)
         self.thumb_cache[key] = photo
         if len(self.thumb_cache) > 800:
@@ -771,6 +1053,15 @@ class ImageConverterApp:
         if not selected_jobs:
             messagebox.showwarning("没有选中图片", "请至少勾选一张图片。")
             return
+        try:
+            self._parse_target_size(self.target_size.get())
+        except ValueError as exc:
+            messagebox.showerror("目标体积格式错误", str(exc))
+            return
+        target_error = self._validate_selected_targets(selected_jobs)
+        if target_error:
+            messagebox.showerror("目标文件冲突", target_error)
+            return
         if self.delete_originals.get():
             ok = messagebox.askyesno("确认删除原图", "转换成功后会删除原图。请确认你已经备份或确实不再需要原图。")
             if not ok:
@@ -779,6 +1070,17 @@ class ImageConverterApp:
         self._set_status_message("开始转换...")
         self.worker = threading.Thread(target=self._convert_worker, args=(selected_jobs,), daemon=True)
         self.worker.start()
+
+    def _validate_selected_targets(self, selected_jobs: list[ConvertJob]) -> str:
+        seen: dict[Path, Path] = {}
+        for job in selected_jobs:
+            target = job.target.resolve()
+            if target in seen:
+                return f"以下两个源文件会输出到同一个目标文件，请调整重命名规则：\n{seen[target]}\n{job.source}\n\n目标：{job.target}"
+            seen[target] = job.source
+            if not job.target.name or any(ch in job.target.name for ch in INVALID_FILENAME_CHARS):
+                return f"目标文件名无效：\n{job.target}"
+        return ""
 
     def _convert_worker(self, selected_jobs: list[ConvertJob]) -> None:
         ok = failed = skipped = 0
@@ -798,11 +1100,13 @@ class ImageConverterApp:
                     skipped += 1
                     report.append(f"[SKIP] {job.source} -> {job.target} (target exists)")
                 else:
+                    before_size = job.source.stat().st_size if job.source.exists() else 0
                     self._convert_one(job.source, job.target)
+                    after_size = job.target.stat().st_size if job.target.exists() else 0
                     if self.delete_originals.get() and job.source.resolve() != job.target.resolve():
                         job.source.unlink()
                     ok += 1
-                    report.append(f"[OK] {job.source} -> {job.target}")
+                    report.append(f"[OK] {job.source} -> {job.target} ({self._format_bytes(before_size)} -> {self._format_bytes(after_size)})")
             except Exception as exc:  # noqa: BLE001
                 failed += 1
                 message = f"{job.source} -> {job.target} ({exc})"
@@ -816,9 +1120,13 @@ class ImageConverterApp:
 
     def _convert_one(self, source: Path, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
+        if source.suffix.lower() in {".heic", ".heif"} and not HEIC_ENABLED:
+            raise ValueError("当前环境未安装 HEIC 支持库，无法读取 HEIC/HEIF 图片")
         out_format = self.output_format.get()
         bg = self._parse_color(self.alpha_bg.get())
+        target_bytes = self._parse_target_size(self.target_size.get())
         with Image.open(source) as im:
+            im = self._apply_watermark(im)
             if out_format == "jpg":
                 im = self._flatten_alpha(im, bg)
             elif out_format == "webp":
@@ -826,9 +1134,9 @@ class ImageConverterApp:
             elif out_format == "png":
                 im = im.convert("RGBA") if im.mode in {"RGBA", "LA", "P"} else im.convert("RGB")
             if out_format == "jpg":
-                im.save(target, format="JPEG", quality=int(self.quality.get()), optimize=True, progressive=bool(self.progressive_jpg.get()))
+                self._save_with_quality_target(im, target, "JPEG", self._safe_int_var(self.quality, 92), target_bytes, progressive=bool(self.progressive_jpg.get()))
             elif out_format == "webp":
-                im.save(target, format="WEBP", quality=int(self.quality.get()), method=6)
+                self._save_with_quality_target(im, target, "WEBP", self._safe_int_var(self.quality, 92), target_bytes)
             elif out_format == "png":
                 im.save(target, format="PNG", optimize=True)
             else:
@@ -842,6 +1150,132 @@ class ImageConverterApp:
             canvas.alpha_composite(rgba)
             return canvas.convert("RGB")
         return im.convert("RGB")
+
+    def _apply_watermark(self, im: Image.Image) -> Image.Image:
+        if not self.watermark_enabled.get():
+            return im
+        base = im.convert("RGBA")
+        layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        opacity = max(1, min(100, self._safe_int_var(self.watermark_opacity, 45)))
+        alpha = int(255 * opacity / 100)
+        margin = max(0, self._safe_int_var(self.watermark_margin, 24))
+        if self.watermark_type.get() == "logo":
+            logo_path = Path(self.watermark_logo.get().strip())
+            if not logo_path.exists():
+                raise ValueError("水印 Logo 文件不存在")
+            with Image.open(logo_path) as logo:
+                mark = logo.convert("RGBA")
+                max_w = max(1, base.width // 4)
+                max_h = max(1, base.height // 4)
+                mark.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+                if alpha < 255:
+                    mark_alpha = mark.getchannel("A").point(lambda value: int(value * alpha / 255))
+                    mark.putalpha(mark_alpha)
+        else:
+            text = self.watermark_text.get().strip()
+            if not text:
+                return im
+            try:
+                font = ImageFont.truetype("msyh.ttc", max(14, min(base.width, base.height) // 28))
+            except OSError:
+                font = ImageFont.load_default()
+            temp = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(temp)
+            box = draw.textbbox((0, 0), text, font=font)
+            mark = Image.new("RGBA", (box[2] - box[0] + 20, box[3] - box[1] + 12), (0, 0, 0, 0))
+            mark_draw = ImageDraw.Draw(mark)
+            mark_draw.rounded_rectangle((0, 0, mark.width - 1, mark.height - 1), radius=4, fill=(0, 0, 0, max(60, alpha // 2)))
+            mark_draw.text((10, 6), text, fill=(255, 255, 255, alpha), font=font)
+        x, y = self._watermark_position(base.size, mark.size, margin)
+        layer.alpha_composite(mark, (x, y))
+        base.alpha_composite(layer)
+        return base
+
+    def _watermark_position(self, base_size: tuple[int, int], mark_size: tuple[int, int], margin: int) -> tuple[int, int]:
+        bw, bh = base_size
+        mw, mh = mark_size
+        mapping = {
+            "左上": (margin, margin),
+            "上中": ((bw - mw) // 2, margin),
+            "右上": (bw - mw - margin, margin),
+            "左中": (margin, (bh - mh) // 2),
+            "居中": ((bw - mw) // 2, (bh - mh) // 2),
+            "右中": (bw - mw - margin, (bh - mh) // 2),
+            "左下": (margin, bh - mh - margin),
+            "下中": ((bw - mw) // 2, bh - mh - margin),
+            "右下": (bw - mw - margin, bh - mh - margin),
+        }
+        x, y = mapping.get(self.watermark_position.get(), mapping["右下"])
+        return max(0, x), max(0, y)
+
+    def _save_with_quality_target(
+        self,
+        im: Image.Image,
+        target: Path,
+        image_format: str,
+        quality: int,
+        target_bytes: int | None,
+        progressive: bool = False,
+    ) -> None:
+        quality = max(1, min(100, quality))
+        save_kwargs: dict[str, object] = {"quality": quality, "optimize": True}
+        if image_format == "JPEG":
+            save_kwargs["progressive"] = progressive
+        elif image_format == "WEBP":
+            save_kwargs["method"] = 6
+        if not target_bytes:
+            im.save(target, format=image_format, **save_kwargs)
+            return
+        best_data: bytes | None = None
+        best_quality = quality
+        low, high = 10, quality
+        while low <= high:
+            mid = (low + high) // 2
+            attempt_kwargs = dict(save_kwargs)
+            attempt_kwargs["quality"] = mid
+            buffer = io.BytesIO()
+            im.save(buffer, format=image_format, **attempt_kwargs)
+            data = buffer.getvalue()
+            if len(data) <= target_bytes:
+                best_data = data
+                best_quality = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        if best_data is None:
+            buffer = io.BytesIO()
+            attempt_kwargs = dict(save_kwargs)
+            attempt_kwargs["quality"] = 10
+            im.save(buffer, format=image_format, **attempt_kwargs)
+            best_data = buffer.getvalue()
+            best_quality = 10
+        if len(best_data) > target_bytes:
+            raise ValueError(f"最低质量 {best_quality} 仍无法压缩到目标体积 {self._format_bytes(target_bytes)} 以内")
+        target.write_bytes(best_data)
+
+    @staticmethod
+    def _parse_target_size(value: str) -> int | None:
+        text = value.strip().lower()
+        if not text:
+            return None
+        match = re.match(r"^(\d+(?:\.\d+)?)\s*(b|kb|k|mb|m)?$", text)
+        if not match:
+            raise ValueError("目标体积请填写 200KB、500KB 或 1.5MB 这种格式")
+        amount = float(match.group(1))
+        unit = match.group(2) or "kb"
+        if unit == "b":
+            return int(amount)
+        if unit in {"mb", "m"}:
+            return int(amount * 1024 * 1024)
+        return int(amount * 1024)
+
+    @staticmethod
+    def _format_bytes(size: int) -> str:
+        if size >= 1024 * 1024:
+            return f"{size / 1024 / 1024:.2f}MB"
+        if size >= 1024:
+            return f"{size / 1024:.1f}KB"
+        return f"{size}B"
 
     @staticmethod
     def _parse_color(value: str) -> tuple[int, int, int]:

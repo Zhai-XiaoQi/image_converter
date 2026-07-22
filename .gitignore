@@ -16,6 +16,7 @@ version_backups/
 # Logs and reports generated while using the tool
 conversion_report.txt
 *.log
+image_converter_presets.json
 
 # OS/editor noise
 .DS_Store
