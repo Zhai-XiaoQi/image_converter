@@ -181,13 +181,16 @@ class ImageConverterApp:
         self.preset_name = StringVar(value="自定义")
         self.presets: dict[str, dict[str, object]] = {}
         self.compression_mode = StringVar(value="quality")
+        self.compression_enabled = BooleanVar(value=True)
         self.target_size = StringVar(value="")
+        self.resize_enabled = BooleanVar(value=False)
         self.resize_mode = StringVar(value="none")
         self.resize_width = IntVar(value=0)
         self.resize_height = IntVar(value=0)
         self.resize_scale_percent = IntVar(value=100)
         self.resize_fit_mode = StringVar(value="pad")
         self.rename_template = StringVar(value="{name}")
+        self.rename_enabled = BooleanVar(value=False)
         self.rename_prefix = StringVar(value="")
         self.rename_suffix = StringVar(value="")
         self.rename_find = StringVar(value="")
@@ -221,6 +224,7 @@ class ImageConverterApp:
         self.single_quality = IntVar(value=92)
         self.single_progressive_jpg = BooleanVar(value=False)
         self.single_alpha_bg = StringVar(value="#ffffff")
+        self.single_result_size_text = StringVar(value="结果尺寸：-")
         self.single_last_result: Path | None = None
         self.input_text = StringVar(value="")
         self.output_text = StringVar(value="")
@@ -306,13 +310,16 @@ class ImageConverterApp:
             "progressive_jpg": bool(self.progressive_jpg.get()),
             "preserve_structure": bool(self.preserve_structure.get()),
             "alpha_bg": self.alpha_bg.get(),
+            "compression_enabled": bool(self.compression_enabled.get()),
             "compression_mode": self.compression_mode.get(),
             "target_size": self.target_size.get(),
+            "resize_enabled": bool(self.resize_enabled.get()),
             "resize_mode": self.resize_mode.get(),
             "resize_width": self._safe_int_var(self.resize_width, 0),
             "resize_height": self._safe_int_var(self.resize_height, 0),
             "resize_scale_percent": self._safe_int_var(self.resize_scale_percent, 100),
             "resize_fit_mode": self.resize_fit_mode.get(),
+            "rename_enabled": bool(self.rename_enabled.get()),
             "rename_template": self.rename_template.get(),
             "rename_prefix": self.rename_prefix.get(),
             "rename_suffix": self.rename_suffix.get(),
@@ -354,13 +361,16 @@ class ImageConverterApp:
         self.progressive_jpg.set(bool(values.get("progressive_jpg", False)))
         self.preserve_structure.set(bool(values.get("preserve_structure", True)))
         self.alpha_bg.set(str(values.get("alpha_bg", "#ffffff")))
+        self.compression_enabled.set(bool(values.get("compression_enabled", True)))
         self.compression_mode.set(str(values.get("compression_mode", "quality")))
         self.target_size.set(str(values.get("target_size", "")))
+        self.resize_enabled.set(bool(values.get("resize_enabled", str(values.get("resize_mode", "none")) != "none")))
         self.resize_mode.set(str(values.get("resize_mode", "none")))
         self.resize_width.set(int(values.get("resize_width", 0)))
         self.resize_height.set(int(values.get("resize_height", 0)))
         self.resize_scale_percent.set(int(values.get("resize_scale_percent", 100)))
         self.resize_fit_mode.set(str(values.get("resize_fit_mode", "pad")))
+        self.rename_enabled.set(bool(values.get("rename_enabled", False)))
         self.rename_template.set(str(values.get("rename_template", "{name}")))
         self.rename_prefix.set(str(values.get("rename_prefix", "")))
         self.rename_suffix.set(str(values.get("rename_suffix", "")))
@@ -466,8 +476,8 @@ class ImageConverterApp:
         search_entry = Entry(filter_row, textvariable=self.search_text, width=34)
         search_entry.pack(side="left")
         Button(filter_row, text="清空", command=self._clear_search, width=8).pack(side="left", padx=(8, 0))
-        Button(filter_row, text="-", command=lambda: self._set_preview_zoom(self.preview_zoom.get() - 15), width=4).pack(side="right", padx=(6, 0))
-        Button(filter_row, text="+", command=lambda: self._set_preview_zoom(self.preview_zoom.get() + 15), width=4).pack(side="right", padx=(6, 0))
+        self.preview_zoom_slider = ttk.Scale(filter_row, from_=60, to=180, orient="horizontal", variable=self.preview_zoom, command=lambda v: self._set_preview_zoom(float(v)))
+        self.preview_zoom_slider.pack(side="right", padx=(8, 0))
         Button(filter_row, text="适应宽度", command=self._fit_preview_width, width=10).pack(side="right", padx=(10, 0))
         Label(filter_row, textvariable=self.preview_zoom_text, fg="#0b5cad", font=("Microsoft YaHei UI", 10, "bold")).pack(side="right")
         Label(filter_row, text="缩放").pack(side="right", padx=(24, 6))
@@ -543,13 +553,19 @@ class ImageConverterApp:
 
         size_compress_box = LabelFrame(opts, text="尺寸 / 压缩", font=section_font)
         size_compress_box.pack(fill="x", pady=6)
+        self.resize_controls: list[object] = []
+        self.compression_controls: list[object] = []
         resize_box = Frame(size_compress_box)
         resize_box.pack(fill="x", padx=10, pady=(8, 2))
         resize_row1 = Frame(resize_box)
         resize_row1.pack(fill="x")
+        self.resize_check = Checkbutton(resize_row1, text="启用尺寸调整", variable=self.resize_enabled, command=self._on_resize_mode_change)
+        self.resize_check.pack(side="left", padx=(0, 12))
         Label(resize_row1, text="尺寸").pack(side="left", padx=(0, 8))
         for label, value in [("不改变尺寸", "none"), ("按比例缩放", "scale"), ("指定长宽", "exact")]:
-            Radiobutton(resize_row1, text=label, variable=self.resize_mode, value=value, command=self._on_resize_mode_change).pack(side="left", padx=(0, 10))
+            rb = Radiobutton(resize_row1, text=label, variable=self.resize_mode, value=value, command=self._on_resize_mode_change)
+            rb.pack(side="left", padx=(0, 10))
+            self.resize_controls.append(rb)
         self.resize_none_row = Frame(resize_box)
         self.resize_none_row.pack(fill="x", pady=(4, 2))
         self.resize_none_label = Label(self.resize_none_row, text="当前模式不会改变图片尺寸。", fg="#666")
@@ -575,43 +591,69 @@ class ImageConverterApp:
         self.resize_fit_combo.bind("<<ComboboxSelected>>", lambda _e: self.scan_jobs())
         self.resize_fit_hint = Label(resize_fit_row, text="stretch=拉伸 / pad=等比留白 / crop=等比裁剪", fg="#666")
         self.resize_fit_hint.pack(side="left", padx=(8, 0))
+        self.resize_controls.extend([
+            self.resize_scale_spin, self.resize_width_spin, self.resize_height_spin,
+            self.resize_fit_combo, self.resize_none_label, self.resize_fit_hint,
+        ])
 
         compress_row = Frame(size_compress_box)
         compress_row.pack(fill="x", padx=10, pady=(4, 8))
+        self.compression_check = Checkbutton(compress_row, text="启用压缩", variable=self.compression_enabled, command=self._update_control_states)
+        self.compression_check.pack(side="left", padx=(0, 12))
         Label(compress_row, text="压缩").pack(side="left", padx=(0, 8))
-        Radiobutton(compress_row, text="固定质量", variable=self.compression_mode, value="quality", command=self._update_control_states).pack(side="left")
+        self.compression_quality_radio = Radiobutton(compress_row, text="固定质量", variable=self.compression_mode, value="quality", command=self._update_control_states)
+        self.compression_quality_radio.pack(side="left")
         self.quality_spin = ttk.Spinbox(compress_row, from_=1, to=100, textvariable=self.quality, width=6)
         self.quality_spin.pack(side="left", padx=(4, 2))
         Label(compress_row, text="%").pack(side="left")
-        Radiobutton(compress_row, text="目标体积", variable=self.compression_mode, value="target", command=self._update_control_states).pack(side="left", padx=(18, 0))
+        self.compression_target_radio = Radiobutton(compress_row, text="目标体积", variable=self.compression_mode, value="target", command=self._update_control_states)
+        self.compression_target_radio.pack(side="left", padx=(18, 0))
         self.target_size_entry = Entry(compress_row, textvariable=self.target_size, width=9)
         self.target_size_entry.pack(side="left", padx=(4, 2))
         self.target_size_unit = Label(compress_row, text="KB")
         self.target_size_unit.pack(side="left")
         self.compression_hint = Label(compress_row, text="", fg="#9a6400")
         self.compression_hint.pack(side="left", padx=(10, 0))
+        self.compression_controls.extend([
+            self.compression_quality_radio, self.quality_spin, self.compression_target_radio,
+            self.target_size_entry, self.target_size_unit, self.compression_hint,
+        ])
 
         rename_box = LabelFrame(opts, text="批量重命名", font=section_font)
         rename_box.pack(fill="x", pady=6)
+        self.rename_controls: list[object] = []
         rename_row = Frame(rename_box)
         rename_row.pack(fill="x", padx=8, pady=(5, 2))
+        self.rename_check = Checkbutton(rename_row, text="启用重命名", variable=self.rename_enabled, command=lambda: (self._update_control_states(), self.scan_jobs()))
+        self.rename_check.pack(side="left", padx=(0, 12))
         Label(rename_row, text="模板").pack(side="left")
-        Entry(rename_row, textvariable=self.rename_template, width=24).pack(side="left", padx=(4, 8))
-        Label(rename_row, text="可用：{name} {parent} {index} {index2} {index3} {date}", fg="#666").pack(side="left")
+        self.rename_template_entry = Entry(rename_row, textvariable=self.rename_template, width=24)
+        self.rename_template_entry.pack(side="left", padx=(4, 8))
+        self.rename_hint = Label(rename_row, text="可用：{name} {parent} {index} {index2} {index3} {date}", fg="#666")
+        self.rename_hint.pack(side="left")
         rename_affix_row = Frame(rename_box)
         rename_affix_row.pack(fill="x", padx=8, pady=(2, 2))
         Label(rename_affix_row, text="前缀").pack(side="left")
-        Entry(rename_affix_row, textvariable=self.rename_prefix, width=12).pack(side="left", padx=(4, 12))
+        self.rename_prefix_entry = Entry(rename_affix_row, textvariable=self.rename_prefix, width=12)
+        self.rename_prefix_entry.pack(side="left", padx=(4, 12))
         Label(rename_affix_row, text="后缀").pack(side="left")
-        Entry(rename_affix_row, textvariable=self.rename_suffix, width=12).pack(side="left", padx=(4, 12))
+        self.rename_suffix_entry = Entry(rename_affix_row, textvariable=self.rename_suffix, width=12)
+        self.rename_suffix_entry.pack(side="left", padx=(4, 12))
         Label(rename_affix_row, text="起始序号").pack(side="left")
-        ttk.Spinbox(rename_affix_row, from_=0, to=99999, textvariable=self.rename_start, width=7).pack(side="left", padx=(4, 0))
+        self.rename_start_spin = ttk.Spinbox(rename_affix_row, from_=0, to=99999, textvariable=self.rename_start, width=7)
+        self.rename_start_spin.pack(side="left", padx=(4, 0))
         rename_replace_row = Frame(rename_box)
         rename_replace_row.pack(fill="x", padx=8, pady=(2, 5))
         Label(rename_replace_row, text="替换").pack(side="left")
-        Entry(rename_replace_row, textvariable=self.rename_find, width=18).pack(side="left", padx=(4, 8))
+        self.rename_find_entry = Entry(rename_replace_row, textvariable=self.rename_find, width=18)
+        self.rename_find_entry.pack(side="left", padx=(4, 8))
         Label(rename_replace_row, text="为").pack(side="left")
-        Entry(rename_replace_row, textvariable=self.rename_replace, width=18).pack(side="left", padx=(4, 8))
+        self.rename_replace_entry = Entry(rename_replace_row, textvariable=self.rename_replace, width=18)
+        self.rename_replace_entry.pack(side="left", padx=(4, 8))
+        self.rename_controls.extend([
+            self.rename_template_entry, self.rename_hint, self.rename_prefix_entry, self.rename_suffix_entry,
+            self.rename_start_spin, self.rename_find_entry, self.rename_replace_entry,
+        ])
 
         watermark_box = LabelFrame(opts, text="批量水印", font=section_font)
         watermark_box.pack(fill="x", pady=6)
@@ -782,8 +824,8 @@ class ImageConverterApp:
         except Exception:
             pass
 
-    def _set_preview_zoom(self, value: int) -> None:
-        value = max(60, min(180, int(value)))
+    def _set_preview_zoom(self, value: int | float) -> None:
+        value = max(60, min(180, int(float(value))))
         self.preview_zoom.set(value)
         self.preview_zoom_text.set(f"{value}%")
         self._populate_grid()
@@ -875,22 +917,33 @@ class ImageConverterApp:
         for widget in (self.progressive_check, self.alpha_label, self.alpha_entry):
             widget.config(state=jpg_state)
 
+        compression_enabled = self.compression_enabled.get()
         if out_format == "png" and self.compression_mode.get() == "target":
             self.compression_mode.set("quality")
-        target_state = "normal" if self.compression_mode.get() == "target" and out_format != "png" else "disabled"
-        quality_state = "normal" if self.compression_mode.get() == "quality" else "disabled"
+        target_state = "normal" if compression_enabled and self.compression_mode.get() == "target" and out_format != "png" else "disabled"
+        quality_state = "normal" if compression_enabled and self.compression_mode.get() == "quality" else "disabled"
+        radio_state = "normal" if compression_enabled else "disabled"
+        self.compression_quality_radio.config(state=radio_state)
+        self.compression_target_radio.config(state=radio_state)
         self.quality_spin.config(state=quality_state)
         self.target_size_entry.config(state=target_state)
         self.target_size_unit.config(state=target_state)
-        self.compression_hint.config(text="PNG仅做无损 optimize" if out_format == "png" else "")
+        self.compression_hint.config(state=radio_state, text="PNG仅做无损 optimize" if compression_enabled and out_format == "png" else "")
 
         for row in (self.resize_none_row, self.resize_scale_row, self.resize_exact_row, self.resize_fit_row):
             row.pack_forget()
+        resize_enabled = self.resize_enabled.get()
+        resize_radio_state = "normal" if resize_enabled else "disabled"
+        for widget in self.resize_controls:
+            if isinstance(widget, ttk.Combobox):
+                widget.config(state="readonly" if resize_enabled else "disabled")
+            else:
+                widget.config(state=resize_radio_state)
         resize_mode = self.resize_mode.get()
-        if resize_mode == "scale":
+        if resize_enabled and resize_mode == "scale":
             self.resize_scale_row.pack(fill="x", padx=8, pady=(2, 5))
             self.resize_scale_spin.config(state="normal")
-        elif resize_mode == "exact":
+        elif resize_enabled and resize_mode == "exact":
             self.resize_exact_row.pack(fill="x", padx=8, pady=(2, 2))
             self.resize_fit_row.pack(fill="x", padx=8, pady=(0, 5))
             self.resize_width_spin.config(state="normal")
@@ -902,6 +955,10 @@ class ImageConverterApp:
             self.resize_width_spin.config(state="disabled")
             self.resize_height_spin.config(state="disabled")
             self.resize_fit_combo.config(state="disabled")
+
+        rename_state = "normal" if self.rename_enabled.get() else "disabled"
+        for widget in self.rename_controls:
+            widget.config(state=rename_state)
 
         watermark_enabled = self.watermark_enabled.get()
         common_state = "normal" if watermark_enabled else "disabled"
@@ -949,22 +1006,36 @@ class ImageConverterApp:
         os.startfile(out)  # type: ignore[attr-defined]
 
     def open_watermark_editor(self) -> None:
-        selected = next((job for job in self.jobs if job.selected), None)
-        if not selected:
+        selected_jobs = [job for job in self.jobs if job.selected]
+        if not selected_jobs:
             messagebox.showwarning("没有样图", "请先在预览区勾选一张图片。")
             return
         if self.watermark_type.get() == "logo" and not Path(self.watermark_logo.get().strip()).exists():
             messagebox.showwarning("没有 Logo", "请先选择水印 Logo 文件。")
             return
+        if self.watermark_type.get() == "logo":
+            try:
+                with Image.open(Path(self.watermark_logo.get().strip())) as logo:
+                    logo.verify()
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror("Logo 不可读", f"当前 Logo 文件无法作为水印读取，请换一张图片。\n\n{exc}")
+                return
         if self.watermark_type.get() == "text" and not self.watermark_text.get().strip():
             messagebox.showwarning("没有文字", "请先输入文字水印内容。")
             return
-        try:
-            base = self._prepare_watermark_preview_image(selected.source)
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("无法预览", str(exc))
-            return
-        WatermarkEditor(self, base, selected.source)
+        errors: list[str] = []
+        for selected in selected_jobs:
+            try:
+                base = self._prepare_watermark_preview_image(selected.source)
+                if errors:
+                    self._set_status_message(f"水印预览已跳过 {len(errors)} 张不可读样图，使用 {selected.source.name}。")
+                WatermarkEditor(self, base, selected.source)
+                return
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{selected.source.name}: {exc}")
+        shown = "\n".join(errors[:5])
+        more = "" if len(errors) <= 5 else f"\n... 还有 {len(errors) - 5} 张不可读"
+        messagebox.showerror("无法预览", f"已勾选图片里没有可用于预览的样图。\n\n{shown}{more}")
 
     def _prepare_watermark_preview_image(self, source: Path) -> Image.Image:
         if source.suffix.lower() in {".heic", ".heif"} and not HEIC_ENABLED:
@@ -1092,6 +1163,8 @@ class ImageConverterApp:
             return str(target).lower()
 
     def _renamed_stem(self, src: Path, index: int) -> str:
+        if not self.rename_enabled.get():
+            return self._sanitize_stem(src.stem) or src.stem
         template = self.rename_template.get().strip() or "{name}"
         date_text = datetime.now().strftime("%Y%m%d")
         parent = src.parent.name
@@ -1541,7 +1614,7 @@ class ImageConverterApp:
         if not selected_jobs:
             messagebox.showwarning("没有选中图片", "请至少勾选一张图片。")
             return
-        if self.compression_mode.get() == "target" and self.output_format.get() != "png":
+        if self.compression_enabled.get() and self.compression_mode.get() == "target" and self.output_format.get() != "png":
             try:
                 self._parse_target_size(self.target_size.get())
             except ValueError as exc:
@@ -1572,6 +1645,8 @@ class ImageConverterApp:
         return ""
 
     def _resize_report_text(self) -> str:
+        if not self.resize_enabled.get():
+            return "off"
         mode = self.resize_mode.get()
         if mode == "scale":
             return f"scale {self._safe_int_var(self.resize_scale_percent, 100)}%"
@@ -1586,7 +1661,8 @@ class ImageConverterApp:
         report = [
             f"Image conversion report: {datetime.now():%Y-%m-%d %H:%M:%S}",
             f"Output format: {self.output_format.get()}",
-            f"Compression mode: {self.compression_mode.get()}",
+            f"Compression enabled: {self.compression_enabled.get()}",
+            f"Compression mode: {self.compression_mode.get() if self.compression_enabled.get() else 'off'}",
             f"Resize: {self._resize_report_text()}",
             f"Total: {len(self.jobs)}",
             f"Selected: {len(selected_jobs)}",
@@ -1623,7 +1699,8 @@ class ImageConverterApp:
             raise ValueError("当前环境未安装 HEIC 支持库，无法读取 HEIC/HEIF 图片")
         out_format = self.output_format.get()
         bg = self._parse_color(self.alpha_bg.get())
-        target_bytes = self._parse_target_size(self.target_size.get()) if self.compression_mode.get() == "target" and out_format != "png" else None
+        target_bytes = self._parse_target_size(self.target_size.get()) if self.compression_enabled.get() and self.compression_mode.get() == "target" and out_format != "png" else None
+        save_quality = self._safe_int_var(self.quality, 92) if self.compression_enabled.get() else 95
         with Image.open(source) as im:
             im = self._resize_image(im, bg)
             im = self._apply_watermark(im)
@@ -1634,9 +1711,9 @@ class ImageConverterApp:
             elif out_format == "png":
                 im = im.convert("RGBA") if im.mode in {"RGBA", "LA", "P"} else im.convert("RGB")
             if out_format == "jpg":
-                self._save_with_quality_target(im, target, "JPEG", self._safe_int_var(self.quality, 92), target_bytes, progressive=bool(self.progressive_jpg.get()))
+                self._save_with_quality_target(im, target, "JPEG", save_quality, target_bytes, progressive=bool(self.progressive_jpg.get()))
             elif out_format == "webp":
-                self._save_with_quality_target(im, target, "WEBP", self._safe_int_var(self.quality, 92), target_bytes)
+                self._save_with_quality_target(im, target, "WEBP", save_quality, target_bytes)
             elif out_format == "png":
                 im.save(target, format="PNG", optimize=True)
             else:
@@ -1652,6 +1729,8 @@ class ImageConverterApp:
         return im.convert("RGB")
 
     def _resize_image(self, im: Image.Image, bg: tuple[int, int, int]) -> Image.Image:
+        if not self.resize_enabled.get():
+            return im
         mode = self.resize_mode.get()
         target_w = max(0, self._safe_int_var(self.resize_width, 0))
         target_h = max(0, self._safe_int_var(self.resize_height, 0))
@@ -1903,6 +1982,7 @@ class ImageConverterApp:
         self.single_alpha_label.pack(side="left")
         self.single_alpha_entry = Entry(opt_row2, textvariable=self.single_alpha_bg, width=10)
         self.single_alpha_entry.pack(side="left", padx=(6, 12))
+        Label(opt_row2, textvariable=self.single_result_size_text, fg="#0b5cad", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(8, 0))
 
         self.single_editor_host = Frame(page)
         self.single_editor_host.pack(fill="both", expand=True, pady=(10, 0))
@@ -1910,6 +1990,17 @@ class ImageConverterApp:
         self._show_empty_single_canvas()
         self._enable_file_drop(self.single_editor_host, self.load_single_image)
         self._on_single_output_format_change()
+
+    def _update_single_result_size(self) -> None:
+        if not self.single_editor:
+            self.single_result_size_text.set("结果尺寸：-")
+            return
+        try:
+            width, height = self.single_editor.result_dimensions()
+        except Exception:
+            self.single_result_size_text.set("结果尺寸：-")
+            return
+        self.single_result_size_text.set(f"结果尺寸：{width} x {height} px / {self.single_output_format.get().upper()}")
 
     def _show_empty_single_canvas(self) -> None:
         for child in self.single_editor_host.winfo_children():
@@ -1956,6 +2047,7 @@ class ImageConverterApp:
         state = "normal" if is_jpg else "disabled"
         for widget in (self.single_progressive_check, self.single_alpha_label, self.single_alpha_entry):
             widget.config(state=state)
+        self._update_single_result_size()
 
     def _enable_file_drop(self, widget, callback) -> None:
         try:
@@ -1997,6 +2089,7 @@ class ImageConverterApp:
         self.single_image_text.set(str(path))
         self.single_last_result = None
         self.single_editor = EmbeddedImageEditor(self, self.single_editor_host, path)
+        self._update_single_result_size()
         self.notebook.select(1)
 
     def save_single_converted(self) -> None:
@@ -2254,6 +2347,8 @@ class ImageEditorWindow:
         self.redo_stack: list[dict[str, object]] = []
         self.last_saved_path: Path | None = None
         self.align_icons: dict[str, ImageTk.PhotoImage] = {}
+        self.width_var.trace_add("write", lambda *_args: self._notify_result_size())
+        self.height_var.trace_add("write", lambda *_args: self._notify_result_size())
 
         self._build_ui()
         self.win.after(80, self._reset_view)
@@ -2453,6 +2548,11 @@ class ImageEditorWindow:
         except Exception:
             width, height = self.original.width, self.original.height
         self.crop_size_text.set(f"当前裁剪：{width} x {height}")
+        self._notify_result_size()
+
+    def _notify_result_size(self) -> None:
+        if hasattr(self.app, "_update_single_result_size"):
+            self.app._update_single_result_size()
 
     def _handles(self) -> list[tuple[int, int]]:
         x1, y1, x2, y2 = self.output_box
@@ -2708,6 +2808,24 @@ class ImageEditorWindow:
             im = im.resize((w, h), Image.Resampling.LANCZOS)
         return im
 
+    def result_dimensions(self) -> tuple[int, int]:
+        x1, y1, x2, y2 = self.output_box
+        ix, iy = self.image_offset
+        sx1 = max(0, int((x1 - ix) / self.scale))
+        sy1 = max(0, int((y1 - iy) / self.scale))
+        sx2 = min(self.original.width, int((x2 - ix) / self.scale))
+        sy2 = min(self.original.height, int((y2 - iy) / self.scale))
+        crop_w = max(1, sx2 - sx1)
+        crop_h = max(1, sy2 - sy1)
+        w, h = max(1, int(self.width_var.get())), max(1, int(self.height_var.get()))
+        if self.keep_ratio.get():
+            ratio = crop_w / crop_h
+            if w / h > ratio:
+                w = max(1, int(h * ratio))
+            else:
+                h = max(1, int(w / ratio))
+        return w, h
+
     def _next_copy_path(self) -> Path:
         base = self.source.with_name(f"{self.source.stem}_edited{self.source.suffix}")
         if not base.exists():
@@ -2811,6 +2929,8 @@ class EmbeddedImageEditor(ImageEditorWindow):
         self.redo_stack: list[dict[str, object]] = []
         self.last_saved_path: Path | None = None
         self.align_icons: dict[str, ImageTk.PhotoImage] = {}
+        self.width_var.trace_add("write", lambda *_args: self._notify_result_size())
+        self.height_var.trace_add("write", lambda *_args: self._notify_result_size())
 
         self._build_ui()
         self.win.after(80, self._reset_view)
