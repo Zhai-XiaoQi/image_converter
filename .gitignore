@@ -12,6 +12,7 @@ dist/
 *.7z
 *.rar
 version_backups/
+图片格式转换工具_v*_EXE版/
 
 # Logs and reports generated while using the tool
 conversion_report.txt
