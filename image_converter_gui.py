@@ -188,6 +188,7 @@ class ImageConverterApp:
         self.compression_mode = StringVar(value="quality")
         self.compression_enabled = BooleanVar(value=True)
         self.target_size = StringVar(value="")
+        self.size_compress_enabled = BooleanVar(value=True)
         self.resize_enabled = BooleanVar(value=False)
         self.resize_mode = StringVar(value="none")
         self.resize_width = IntVar(value=0)
@@ -200,6 +201,8 @@ class ImageConverterApp:
         self.rename_suffix = StringVar(value="")
         self.rename_find = StringVar(value="")
         self.rename_replace = StringVar(value="")
+        self.rename_replace_rules: list[tuple[str, str]] = []
+        self.rename_rules_summary = StringVar(value="额外规则 0 条")
         self.rename_start = IntVar(value=1)
         self.watermark_enabled = BooleanVar(value=False)
         self.watermark_type = StringVar(value="text")
@@ -230,6 +233,7 @@ class ImageConverterApp:
         self.single_progressive_jpg = BooleanVar(value=False)
         self.single_alpha_bg = StringVar(value="#ffffff")
         self.single_result_size_text = StringVar(value="结果尺寸：-")
+        self.single_result_file_size_text = StringVar(value="结果大小：-")
         self.single_last_result: Path | None = None
         self.input_text = StringVar(value="")
         self.output_text = StringVar(value="")
@@ -328,6 +332,7 @@ class ImageConverterApp:
             "rename_suffix": self.rename_suffix.get(),
             "rename_find": self.rename_find.get(),
             "rename_replace": self.rename_replace.get(),
+            "rename_replace_rules": list(self.rename_replace_rules),
             "rename_start": self._safe_int_var(self.rename_start, 1),
             "watermark_enabled": bool(self.watermark_enabled.get()),
             "watermark_type": self.watermark_type.get(),
@@ -498,25 +503,21 @@ class ImageConverterApp:
         opts.pack(fill="both", expand=True, padx=8, pady=8)
         content.add(settings_shell, minsize=560)
 
-        preset_box = LabelFrame(opts, text="批量尺寸", font=section_font)
+        preset_box = LabelFrame(opts, labelwidget=self._make_section_label("批量尺寸", self.resize_enabled, self._on_resize_mode_change), font=section_font)
         preset_box.pack(fill="x", pady=(0, 6))
         preset_row = Frame(preset_box)
         preset_row.pack(fill="x", padx=10, pady=7)
-        self.size_preset_check = Checkbutton(preset_row, text="启用", variable=self.resize_enabled, command=self._on_resize_mode_change)
-        self.size_preset_check.pack(side="left", padx=(0, 10))
         self.preset_combo = ttk.Combobox(preset_row, textvariable=self.preset_name, values=self._preset_names(), width=26, state="readonly")
         self.preset_combo.pack(side="left", fill="x", expand=True)
         self.preset_combo.bind("<<ComboboxSelected>>", lambda _e: self.apply_preset(self.preset_name.get()))
         Button(preset_row, text="保存预设", command=self.save_current_preset, width=10).pack(side="left", padx=(8, 0))
         Label(preset_box, textvariable=self.preset_summary, fg="#0b5cad", anchor="w", wraplength=500).pack(fill="x", padx=10, pady=(0, 7))
 
-        base_box = LabelFrame(opts, text="格式转换", font=section_font)
+        base_box = LabelFrame(opts, labelwidget=self._make_section_label("格式转换", self.format_conversion_enabled, self._on_output_format_change), font=section_font)
         base_box.pack(fill="x", pady=6)
         self.format_controls: list[object] = []
         base_row1 = Frame(base_box)
         base_row1.pack(fill="x", padx=10, pady=(7, 4))
-        self.format_check = Checkbutton(base_row1, text="启用", variable=self.format_conversion_enabled, command=self._on_output_format_change)
-        self.format_check.pack(side="left", padx=(0, 12))
         Label(base_row1, text="输出格式").pack(side="left")
         for label, value in [("JPG", "jpg"), ("PNG", "png"), ("WEBP", "webp")]:
             rb = Radiobutton(base_row1, text=label, variable=self.output_format, value=value, command=self._on_output_format_change)
@@ -532,9 +533,9 @@ class ImageConverterApp:
         self.alpha_entry.pack(side="left", padx=(6, 0))
         self.preserve_structure_check = Checkbutton(base_row2, text="保留目录结构", variable=self.preserve_structure, command=self.scan_jobs)
         self.preserve_structure_check.pack(side="left", padx=(18, 0))
-        self.format_controls.extend([self.progressive_check, self.alpha_label, self.alpha_entry])
+        self.format_controls.extend([self.progressive_check, self.alpha_label, self.alpha_entry, self.preserve_structure_check])
 
-        size_compress_box = LabelFrame(opts, text="尺寸 / 压缩", font=section_font)
+        size_compress_box = LabelFrame(opts, labelwidget=self._make_section_label("尺寸 / 压缩", self.size_compress_enabled, self._on_size_compress_toggle), font=section_font)
         size_compress_box.pack(fill="x", pady=6)
         self.resize_controls: list[object] = []
         self.compression_controls: list[object] = []
@@ -579,8 +580,6 @@ class ImageConverterApp:
 
         compress_row = Frame(size_compress_box)
         compress_row.pack(fill="x", padx=10, pady=(4, 8))
-        self.compression_check = Checkbutton(compress_row, text="启用", variable=self.compression_enabled, command=self._update_control_states)
-        self.compression_check.pack(side="left", padx=(0, 12))
         Label(compress_row, text="压缩").pack(side="left", padx=(0, 8))
         self.compression_quality_radio = Radiobutton(compress_row, text="固定质量", variable=self.compression_mode, value="quality", command=self._update_control_states)
         self.compression_quality_radio.pack(side="left")
@@ -600,13 +599,11 @@ class ImageConverterApp:
             self.target_size_entry, self.target_size_unit, self.compression_hint,
         ])
 
-        rename_box = LabelFrame(opts, text="批量重命名", font=section_font)
+        rename_box = LabelFrame(opts, labelwidget=self._make_section_label("批量重命名", self.rename_enabled, lambda: (self._update_control_states(), self.scan_jobs())), font=section_font)
         rename_box.pack(fill="x", pady=6)
         self.rename_controls: list[object] = []
         rename_row = Frame(rename_box)
         rename_row.pack(fill="x", padx=8, pady=(5, 2))
-        self.rename_check = Checkbutton(rename_row, text="启用", variable=self.rename_enabled, command=lambda: (self._update_control_states(), self.scan_jobs()))
-        self.rename_check.pack(side="left", padx=(0, 12))
         Label(rename_row, text="模板").pack(side="left")
         self.rename_template_entry = Entry(rename_row, textvariable=self.rename_template, width=24)
         self.rename_template_entry.pack(side="left", padx=(4, 8))
@@ -631,20 +628,23 @@ class ImageConverterApp:
         Label(rename_replace_row, text="为").pack(side="left")
         self.rename_replace_entry = Entry(rename_replace_row, textvariable=self.rename_replace, width=18)
         self.rename_replace_entry.pack(side="left", padx=(4, 8))
+        self.rename_rules_button = Button(rename_replace_row, text="替换规则...", command=self.open_rename_rules_editor, width=12)
+        self.rename_rules_button.pack(side="left", padx=(4, 8))
+        self.rename_rules_label = Label(rename_replace_row, textvariable=self.rename_rules_summary, fg="#0b5cad")
+        self.rename_rules_label.pack(side="left")
         self.rename_controls.extend([
             self.rename_template_entry, self.rename_hint, self.rename_prefix_entry, self.rename_suffix_entry,
             self.rename_start_spin, self.rename_find_entry, self.rename_replace_entry,
+            self.rename_rules_button, self.rename_rules_label,
         ])
 
-        watermark_box = LabelFrame(opts, text="批量水印", font=section_font)
+        watermark_box = LabelFrame(opts, labelwidget=self._make_section_label("批量水印", self.watermark_enabled, self._update_control_states), font=section_font)
         watermark_box.pack(fill="x", pady=6)
         watermark_row1 = Frame(watermark_box)
         watermark_row1.pack(fill="x", padx=8, pady=(5, 2))
         self.watermark_common_controls: list[object] = []
         self.watermark_text_controls: list[object] = []
         self.watermark_logo_controls: list[object] = []
-        self.watermark_check = Checkbutton(watermark_row1, text="启用", variable=self.watermark_enabled, command=self._update_control_states)
-        self.watermark_check.pack(side="left")
         self.watermark_preview_button = Button(watermark_row1, text="预览/编辑水印", command=self.open_watermark_editor, width=14)
         self.watermark_preview_button.pack(side="right")
         self.watermark_text_radio = Radiobutton(watermark_row1, text="文字", variable=self.watermark_type, value="text", command=self._update_control_states)
@@ -748,6 +748,12 @@ class ImageConverterApp:
         self._on_output_format_change()
         self.root.after(220, self._set_initial_panes)
         self._bind_shortcuts()
+
+    def _make_section_label(self, text: str, variable: BooleanVar, command) -> Frame:
+        label = Frame(self.root)
+        Label(label, text=text, font=("Microsoft YaHei UI", 10, "bold")).pack(side="left")
+        Checkbutton(label, text="启用", variable=variable, command=command).pack(side="left", padx=(8, 0))
+        return label
 
     def _bind_shortcuts(self) -> None:
         self.root.bind("<Return>", self._shortcut_enter)
@@ -899,6 +905,103 @@ class ImageConverterApp:
         self.watermark_custom_x.set(-1.0)
         self.watermark_custom_y.set(-1.0)
 
+    def _normalize_rename_rules(self, raw_rules: object) -> list[tuple[str, str]]:
+        rules: list[tuple[str, str]] = []
+        if isinstance(raw_rules, list):
+            for item in raw_rules:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    find, repl = str(item[0]), str(item[1])
+                elif isinstance(item, dict):
+                    find, repl = str(item.get("find", "")), str(item.get("replace", ""))
+                else:
+                    continue
+                if find:
+                    rules.append((find, repl))
+        return rules
+
+    def _update_rename_rules_summary(self) -> None:
+        self.rename_rules_summary.set(f"额外规则 {len(self.rename_replace_rules)} 条")
+
+    def open_rename_rules_editor(self) -> None:
+        win = Toplevel(self.root)
+        win.title("批量替换规则")
+        win.geometry("620x420")
+        win.transient(self.root)
+        rules = list(self.rename_replace_rules)
+
+        top = Frame(win, padx=10, pady=10)
+        top.pack(fill="both", expand=True)
+        tree = ttk.Treeview(top, columns=("find", "replace"), show="headings", height=10)
+        tree.heading("find", text="查找")
+        tree.heading("replace", text="替换为")
+        tree.column("find", width=220, stretch=True)
+        tree.column("replace", width=220, stretch=True)
+        tree.pack(fill="both", expand=True)
+
+        form = Frame(top)
+        form.pack(fill="x", pady=(10, 0))
+        find_var = StringVar()
+        replace_var = StringVar()
+        Label(form, text="查找").pack(side="left")
+        Entry(form, textvariable=find_var, width=22).pack(side="left", padx=(4, 10))
+        Label(form, text="替换为").pack(side="left")
+        Entry(form, textvariable=replace_var, width=22).pack(side="left", padx=(4, 10))
+
+        def refresh() -> None:
+            tree.delete(*tree.get_children())
+            for index, (find, repl) in enumerate(rules):
+                tree.insert("", "end", iid=str(index), values=(find, repl))
+
+        def add_rule() -> None:
+            find = find_var.get()
+            if not find:
+                messagebox.showwarning("缺少查找内容", "请先输入要查找的文本。", parent=win)
+                return
+            rules.append((find, replace_var.get()))
+            find_var.set("")
+            replace_var.set("")
+            refresh()
+
+        def remove_rule() -> None:
+            selected = tree.selection()
+            if not selected:
+                return
+            for iid in sorted((int(item) for item in selected), reverse=True):
+                if 0 <= iid < len(rules):
+                    rules.pop(iid)
+            refresh()
+
+        def move_rule(delta: int) -> None:
+            selected = tree.selection()
+            if not selected:
+                return
+            index = int(selected[0])
+            new_index = index + delta
+            if not (0 <= index < len(rules) and 0 <= new_index < len(rules)):
+                return
+            rules[index], rules[new_index] = rules[new_index], rules[index]
+            refresh()
+            tree.selection_set(str(new_index))
+
+        def save_rules() -> None:
+            self.rename_replace_rules = list(rules)
+            self._update_rename_rules_summary()
+            self.scan_jobs()
+            win.destroy()
+
+        Button(form, text="添加", command=add_rule, width=8).pack(side="left")
+        actions = Frame(top)
+        actions.pack(fill="x", pady=(10, 0))
+        Button(actions, text="删除", command=remove_rule, width=8).pack(side="left")
+        Button(actions, text="上移", command=lambda: move_rule(-1), width=8).pack(side="left", padx=(8, 0))
+        Button(actions, text="下移", command=lambda: move_rule(1), width=8).pack(side="left", padx=(8, 0))
+        Button(actions, text="取消", command=win.destroy, width=10).pack(side="right")
+        Button(actions, text="保存规则", command=save_rules, width=12, bg="#0b5cad", fg="white").pack(side="right", padx=(0, 8))
+        refresh()
+        win.update_idletasks()
+        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+        win.geometry(f"620x420+{max(0, (sw - 620) // 2)}+{max(0, (sh - 420) // 2)}")
+
     def _on_output_format_change(self) -> None:
         is_jpg = self.output_format.get() == "jpg"
         if not is_jpg:
@@ -912,6 +1015,10 @@ class ImageConverterApp:
         self._update_control_states()
         self.scan_jobs()
 
+    def _on_size_compress_toggle(self) -> None:
+        self._update_control_states()
+        self.scan_jobs()
+
     def _update_control_states(self) -> None:
         out_format = self.output_format.get()
         is_jpg = out_format == "jpg"
@@ -922,7 +1029,7 @@ class ImageConverterApp:
         for widget in (self.progressive_check, self.alpha_label, self.alpha_entry):
             widget.config(state=jpg_state)
 
-        compression_enabled = self.compression_enabled.get()
+        compression_enabled = self.size_compress_enabled.get() and self.compression_enabled.get()
         if out_format == "png" and self.compression_mode.get() == "target":
             self.compression_mode.set("quality")
         target_state = "normal" if compression_enabled and self.compression_mode.get() == "target" and out_format != "png" else "disabled"
@@ -937,8 +1044,8 @@ class ImageConverterApp:
 
         for row in (self.resize_none_row, self.resize_scale_row, self.resize_exact_row, self.resize_fit_row):
             row.pack_forget()
-        resize_enabled = self.resize_enabled.get()
-        self.preset_combo.config(state="readonly" if resize_enabled else "disabled")
+        resize_enabled = self.size_compress_enabled.get() and self.resize_enabled.get()
+        self.preset_combo.config(state="readonly" if self.resize_enabled.get() else "disabled")
         resize_radio_state = "normal" if resize_enabled else "disabled"
         for widget in self.resize_controls:
             if isinstance(widget, ttk.Combobox):
@@ -1213,6 +1320,9 @@ class ImageConverterApp:
         find = self.rename_find.get()
         if find:
             stem = stem.replace(find, self.rename_replace.get())
+        for find_text, replace_text in self.rename_replace_rules:
+            if find_text:
+                stem = stem.replace(find_text, replace_text)
         return self._sanitize_stem(stem) or src.stem
 
     @staticmethod
@@ -1643,7 +1753,8 @@ class ImageConverterApp:
         if not selected_jobs:
             messagebox.showwarning("没有选中图片", "请至少勾选一张图片。")
             return
-        if self.compression_enabled.get() and self.compression_mode.get() == "target" and any(self._effective_output_format(job.source) in {"jpg", "webp"} for job in selected_jobs):
+        compression_enabled = self.size_compress_enabled.get() and self.compression_enabled.get()
+        if compression_enabled and self.compression_mode.get() == "target" and any(self._effective_output_format(job.source) in {"jpg", "webp"} for job in selected_jobs):
             try:
                 self._parse_target_size(self.target_size.get())
             except ValueError as exc:
@@ -1674,7 +1785,7 @@ class ImageConverterApp:
         return ""
 
     def _resize_report_text(self) -> str:
-        if not self.resize_enabled.get():
+        if not (self.size_compress_enabled.get() and self.resize_enabled.get()):
             return "off"
         mode = self.resize_mode.get()
         if mode == "scale":
@@ -1691,8 +1802,8 @@ class ImageConverterApp:
             f"Image conversion report: {datetime.now():%Y-%m-%d %H:%M:%S}",
             f"Format conversion enabled: {self.format_conversion_enabled.get()}",
             f"Output format: {self.output_format.get() if self.format_conversion_enabled.get() else 'source'}",
-            f"Compression enabled: {self.compression_enabled.get()}",
-            f"Compression mode: {self.compression_mode.get() if self.compression_enabled.get() else 'off'}",
+            f"Compression enabled: {self.size_compress_enabled.get() and self.compression_enabled.get()}",
+            f"Compression mode: {self.compression_mode.get() if self.size_compress_enabled.get() and self.compression_enabled.get() else 'off'}",
             f"Resize: {self._resize_report_text()}",
             f"Total: {len(self.jobs)}",
             f"Selected: {len(selected_jobs)}",
@@ -1729,8 +1840,9 @@ class ImageConverterApp:
             raise ValueError("当前环境未安装 HEIC 支持库，无法读取 HEIC/HEIF 图片")
         out_format = self._effective_output_format(source)
         bg = self._parse_color(self.alpha_bg.get())
-        target_bytes = self._parse_target_size(self.target_size.get()) if self.compression_enabled.get() and self.compression_mode.get() == "target" and out_format in {"jpg", "webp"} else None
-        save_quality = self._safe_int_var(self.quality, 92) if self.compression_enabled.get() else 95
+        compression_enabled = self.size_compress_enabled.get() and self.compression_enabled.get()
+        target_bytes = self._parse_target_size(self.target_size.get()) if compression_enabled and self.compression_mode.get() == "target" and out_format in {"jpg", "webp"} else None
+        save_quality = self._safe_int_var(self.quality, 92) if compression_enabled else 95
         with Image.open(source) as im:
             im = self._resize_image(im, bg)
             im = self._apply_watermark(im)
@@ -1763,7 +1875,7 @@ class ImageConverterApp:
         return im.convert("RGB")
 
     def _resize_image(self, im: Image.Image, bg: tuple[int, int, int]) -> Image.Image:
-        if not self.resize_enabled.get():
+        if not (self.size_compress_enabled.get() and self.resize_enabled.get()):
             return im
         mode = self.resize_mode.get()
         target_w = max(0, self._safe_int_var(self.resize_width, 0))
@@ -2016,7 +2128,8 @@ class ImageConverterApp:
         self.single_alpha_label.pack(side="left")
         self.single_alpha_entry = Entry(opt_row2, textvariable=self.single_alpha_bg, width=10)
         self.single_alpha_entry.pack(side="left", padx=(6, 12))
-        Label(opt_row2, textvariable=self.single_result_size_text, fg="#0b5cad", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(8, 0))
+        Label(opt_row2, textvariable=self.single_result_size_text, fg="#475467", font=("Microsoft YaHei UI", 9)).pack(side="left", padx=(8, 0))
+        Label(opt_row2, textvariable=self.single_result_file_size_text, fg="#c05621", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(10, 0))
 
         self.single_editor_host = Frame(page)
         self.single_editor_host.pack(fill="both", expand=True, pady=(10, 0))
@@ -2028,26 +2141,28 @@ class ImageConverterApp:
     def _update_single_result_size(self) -> None:
         if not self.single_editor:
             self.single_result_size_text.set("结果尺寸：-")
+            self.single_result_file_size_text.set("结果大小：-")
             return
         try:
             width, height = self.single_editor.result_dimensions()
         except Exception:
             self.single_result_size_text.set("结果尺寸：-")
+            self.single_result_file_size_text.set("结果大小：-")
             return
-        base_text = f"结果尺寸：{width} x {height} px / {self.single_output_format.get().upper()}"
-        self.single_result_size_text.set(f"{base_text} / 估算中...")
+        self.single_result_size_text.set(f"结果尺寸：{width} x {height} px / {self.single_output_format.get().upper()}")
+        self.single_result_file_size_text.set("结果大小：估算中...")
         if self.single_result_after_id:
             self.root.after_cancel(self.single_result_after_id)
-        self.single_result_after_id = self.root.after(260, lambda: self._update_single_result_bytes(base_text))
+        self.single_result_after_id = self.root.after(260, self._update_single_result_bytes)
 
-    def _update_single_result_bytes(self, base_text: str) -> None:
+    def _update_single_result_bytes(self) -> None:
         if not self.single_editor:
             return
         try:
             size = self._estimate_single_result_bytes()
-            self.single_result_size_text.set(f"{base_text} / 约 {self._format_bytes(size)}")
+            self.single_result_file_size_text.set(f"结果大小：约 {self._format_bytes(size)}")
         except Exception:
-            self.single_result_size_text.set(f"{base_text} / 体积暂不可估算")
+            self.single_result_file_size_text.set("结果大小：暂不可估算")
 
     def _estimate_single_result_bytes(self) -> int:
         if not self.single_editor:
@@ -2431,7 +2546,7 @@ class ImageEditorWindow:
         top = Frame(self.win, padx=10, pady=8)
         top.pack(fill="x")
         Label(top, text=f"原始尺寸：{self.original.width} x {self.original.height}").pack(side="left")
-        Label(top, textvariable=self.crop_size_text, fg="#0b5cad", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(18, 0))
+        Label(top, textvariable=self.crop_size_text, fg="#667085", font=("Microsoft YaHei UI", 9)).pack(side="left", padx=(18, 0))
         Label(top, text="宽").pack(side="left", padx=(20, 4))
         width_entry = Entry(top, textvariable=self.width_var, width=8)
         width_entry.pack(side="left")
