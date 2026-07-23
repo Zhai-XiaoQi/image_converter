@@ -410,15 +410,6 @@ class ImageConverterApp:
         style.configure("TNotebook.Tab", font=("Microsoft YaHei UI", 12, "bold"), padding=(18, 8))
         style.map("File.Treeview", background=[("selected", "#dcecff")])
 
-        header = Frame(self.root)
-        header.pack(fill="x", padx=12, pady=(8, 0))
-        Label(
-            header,
-            text=f"图片格式转换工具 {APP_VERSION}",
-            font=("Microsoft YaHei UI", 10, "bold"),
-            fg="#0b5cad",
-        ).pack(side="left")
-
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True)
         main = Frame(self.notebook, padx=12, pady=12)
