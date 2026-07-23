@@ -192,7 +192,8 @@ class ImageConverterApp:
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.target_conflict_error = ""
         self.workflow_cards: dict[str, Frame] = {}
-        self.parameter_panels: dict[str, LabelFrame] = {}
+        self.parameter_panels: dict[str, Frame] = {}
+        self.parameter_panel_bodies: dict[str, Frame] = {}
         self.parameter_panel_pack: dict[str, dict[str, object]] = {}
         self.parameter_panel_children: dict[str, list[tuple[object, dict[str, object]]]] = {}
         self.parameter_panel_expanded: dict[str, bool] = {
@@ -622,8 +623,7 @@ class ImageConverterApp:
         Button(preset_row, text="保存预设", command=self.save_current_preset, width=10).pack(side="left", padx=(8, 0))
         Label(preset_box, textvariable=self.preset_summary, fg="#0b5cad", anchor="w", wraplength=500).pack(fill="x", padx=10, pady=(0, 7))
 
-        base_box = LabelFrame(opts, labelwidget=self._make_section_label("格式与输出", self.format_conversion_enabled, self._on_output_format_change, "format"), font=section_font)
-        base_box.pack(fill="x", pady=6)
+        _base_panel, base_box = self._make_collapsible_panel(opts, "格式与输出", self.format_conversion_enabled, self._on_output_format_change, "format")
         self.format_controls: list[object] = []
         base_row1 = Frame(base_box)
         base_row1.pack(fill="x", padx=10, pady=(7, 4))
@@ -644,8 +644,7 @@ class ImageConverterApp:
         self.preserve_structure_check.pack(side="left", padx=(18, 0))
         self.format_controls.extend([self.progressive_check, self.alpha_label, self.alpha_entry, self.preserve_structure_check])
 
-        size_compress_box = LabelFrame(opts, labelwidget=self._make_section_label("尺寸与压缩", self.size_compress_enabled, self._on_size_compress_toggle, "size"), font=section_font)
-        size_compress_box.pack(fill="x", pady=6)
+        _size_panel, size_compress_box = self._make_collapsible_panel(opts, "尺寸与压缩", self.size_compress_enabled, self._on_size_compress_toggle, "size")
         self.resize_controls: list[object] = []
         self.compression_controls: list[object] = []
         resize_box = Frame(size_compress_box)
@@ -708,8 +707,7 @@ class ImageConverterApp:
             self.target_size_entry, self.target_size_unit, self.compression_hint,
         ])
 
-        rename_box = LabelFrame(opts, labelwidget=self._make_section_label("批量重命名", self.rename_enabled, lambda: (self._update_control_states(), self.scan_jobs()), "rename"), font=section_font)
-        rename_box.pack(fill="x", pady=6)
+        _rename_panel, rename_box = self._make_collapsible_panel(opts, "批量重命名", self.rename_enabled, lambda: (self._update_control_states(), self.scan_jobs()), "rename")
         self.rename_controls: list[object] = []
         rename_row = Frame(rename_box)
         rename_row.pack(fill="x", padx=8, pady=(5, 2))
@@ -747,8 +745,7 @@ class ImageConverterApp:
             self.rename_rules_button, self.rename_rules_label,
         ])
 
-        watermark_box = LabelFrame(opts, labelwidget=self._make_section_label("批量水印", self.watermark_enabled, self._update_control_states, "watermark"), font=section_font)
-        watermark_box.pack(fill="x", pady=6)
+        _watermark_panel, watermark_box = self._make_collapsible_panel(opts, "批量水印", self.watermark_enabled, self._update_control_states, "watermark")
         watermark_row1 = Frame(watermark_box)
         watermark_row1.pack(fill="x", padx=8, pady=(5, 2))
         self.watermark_common_controls: list[object] = []
@@ -820,11 +817,6 @@ class ImageConverterApp:
         ])
         self.watermark_logo_controls.append(self.watermark_logo_button)
 
-        self._register_parameter_panel("format", base_box)
-        self._register_parameter_panel("size", size_compress_box)
-        self._register_parameter_panel("rename", rename_box)
-        self._register_parameter_panel("watermark", watermark_box)
-
         danger_box = LabelFrame(opts, text="危险操作", font=section_font)
         danger_box.pack(fill="x", pady=(6, 0))
         danger_row = Frame(danger_box)
@@ -882,32 +874,27 @@ class ImageConverterApp:
         self.root.after(220, self._set_initial_panes)
         self._bind_shortcuts()
 
-    def _make_section_label(self, text: str, variable: BooleanVar, command, panel_key: str) -> Frame:
-        label = Frame(self.root)
+    def _make_collapsible_panel(self, parent: Frame, text: str, variable: BooleanVar, command, panel_key: str) -> tuple[Frame, Frame]:
+        panel = Frame(parent, bd=1, relief="groove", bg="#f3f4f6")
+        panel.pack(fill="x", pady=6)
+        header = Frame(panel, bg="#f3f4f6")
+        header.pack(fill="x", padx=8, pady=5)
         self.parameter_toggle_buttons[panel_key] = Button(
-            label,
+            header,
             text="▼" if self.parameter_panel_expanded.get(panel_key, False) else "▶",
             width=2,
             command=lambda key=panel_key: self._toggle_parameter_panel(key),
         )
         self.parameter_toggle_buttons[panel_key].pack(side="left")
-        Label(label, text=text, font=("Microsoft YaHei UI", 10, "bold")).pack(side="left", padx=(4, 0))
-        Checkbutton(label, text="启用", variable=variable, command=command).pack(side="left", padx=(8, 0))
-        Label(label, textvariable=self.parameter_summary_vars[panel_key], fg="#667085", font=("Microsoft YaHei UI", 9), width=26, anchor="w").pack(side="left", padx=(10, 0))
-        return label
-
-    def _register_parameter_panel(self, key: str, panel: LabelFrame) -> None:
-        self.parameter_panels[key] = panel
-        self.parameter_panel_pack[key] = panel.pack_info()
-        children: list[tuple[object, dict[str, object]]] = []
-        for child in panel.winfo_children():
-            try:
-                children.append((child, child.pack_info()))
-            except Exception:
-                pass
-        self.parameter_panel_children[key] = children
-        if not self.parameter_panel_expanded.get(key, False):
-            self._set_parameter_panel_expanded(key, False)
+        Label(header, text=text, font=("Microsoft YaHei UI", 10, "bold"), bg="#f3f4f6").pack(side="left", padx=(4, 0))
+        Checkbutton(header, text="启用", variable=variable, command=command, bg="#f3f4f6", activebackground="#f3f4f6").pack(side="left", padx=(8, 0))
+        Label(header, textvariable=self.parameter_summary_vars[panel_key], fg="#667085", bg="#f3f4f6", font=("Microsoft YaHei UI", 9), width=28, anchor="w").pack(side="left", padx=(10, 0))
+        body = Frame(panel)
+        self.parameter_panels[panel_key] = panel
+        self.parameter_panel_bodies[panel_key] = body
+        if self.parameter_panel_expanded.get(panel_key, False):
+            body.pack(fill="x", padx=0, pady=(0, 6))
+        return panel, body
 
     def _toggle_parameter_panel(self, key: str) -> None:
         self._set_parameter_panel_expanded(key, not self.parameter_panel_expanded.get(key, False))
@@ -917,29 +904,18 @@ class ImageConverterApp:
         button = self.parameter_toggle_buttons.get(key)
         if button:
             button.config(text="▼" if expanded else "▶")
-        panel = self.parameter_panels.get(key)
-        if panel and expanded:
-            try:
-                panel.pack_propagate(True)
-                panel.configure(height=0)
-            except Exception:
-                pass
-        for child, pack_info in self.parameter_panel_children.get(key, []):
-            try:
-                if expanded:
-                    child.pack(**pack_info)
-                else:
-                    child.pack_forget()
-            except Exception:
-                pass
-        if panel:
-            try:
-                if not expanded:
-                    panel.configure(height=34)
-                    panel.pack_propagate(False)
-                panel.update_idletasks()
-            except Exception:
-                pass
+        body = self.parameter_panel_bodies.get(key)
+        if not body:
+            return
+        if expanded:
+            if not body.winfo_manager():
+                body.pack(fill="x", padx=0, pady=(0, 6))
+        else:
+            body.pack_forget()
+        try:
+            self.parameter_panels[key].update_idletasks()
+        except Exception:
+            pass
 
     def _expand_parameter_panel(self, key: str) -> None:
         for panel_key in self.parameter_panel_expanded:
