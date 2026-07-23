@@ -618,6 +618,8 @@ class ImageConverterApp:
         self.workflow_canvas.bind("<Configure>", self._on_workflow_canvas_configure)
         self.workflow_canvas.bind("<MouseWheel>", self._on_workflow_mousewheel)
         self.workflow_cards_frame.bind("<MouseWheel>", self._on_workflow_mousewheel)
+        self.workflow_progress = ttk.Progressbar(workflow_box, mode="determinate")
+        self.workflow_progress.pack(fill="x", padx=8, pady=(2, 0))
         Label(
             workflow_box,
             textvariable=self.workflow_stats_text,
@@ -877,16 +879,12 @@ class ImageConverterApp:
         Label(self.task_line_frame, textvariable=self.task_current_step_text, anchor="w", fg="#0b5cad", font=self.status_number_font).pack(side="left")
         Label(self.task_line_frame, text="  |  ").pack(side="left")
         Label(self.task_line_frame, textvariable=self.task_progress_text, anchor="w").pack(side="left")
-        self.task_open_output_button = Button(self.task_line_frame, text="打开输出目录", command=self.open_output_dir, width=12)
-        self.task_open_output_button.pack(side="right")
-        self.task_open_output_button.pack_forget()
         self._set_status_message("请选择图片或文件夹。")
 
         bottom = Frame(main, height=44)
         bottom.pack(fill="x", pady=(4, 8))
         bottom.pack_propagate(False)
-        self.progress = ttk.Progressbar(bottom, mode="determinate")
-        self.progress.pack(side="left", fill="x", expand=True, pady=(14, 12))
+        self.progress = self.workflow_progress
         self.start_button = Button(
             bottom,
             text="开始转换",
@@ -898,7 +896,7 @@ class ImageConverterApp:
             activeforeground="white",
             font=("Microsoft YaHei UI", 10, "bold"),
         )
-        self.start_button.pack(side="left", fill="y", padx=(10, 0), pady=(4, 4))
+        self.start_button.pack(side="right", fill="y", padx=(10, 0), pady=(4, 4))
         for drop_widget in (preview, self.tree, self.grid_canvas):
             self._enable_batch_drop(drop_widget)
         self._build_single_editor_tab(module_font)
@@ -1074,8 +1072,6 @@ class ImageConverterApp:
         self.task_current_file_text.set(f"当前文件：{current_file or '-'}")
         self.task_current_step_text.set(f"当前步骤：{current_step or '等待开始转换'}")
         self.task_progress_text.set(f"总进度：{progress_text}")
-        if hasattr(self, "task_open_output_button"):
-            self.task_open_output_button.pack_forget()
 
     def _update_start_button_state(self) -> None:
         if not hasattr(self, "start_button"):
@@ -1509,12 +1505,12 @@ class ImageConverterApp:
             return
         for index, module in enumerate(modules, start=1):
             status = self._workflow_status_for_module(module)
-            _marker, marker_fg, row_bg, title_fg = self._workflow_status_style(status)
+            _marker, marker_fg, _row_bg, title_fg = self._workflow_status_style(status)
             row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg="#050505", padx=6, pady=0)
             row.pack(fill="x")
-            title = Button(
+            module_button = Button(
                 row,
-                text=f"{index:02d}> {module.name:<8} | {module.summary}",
+                text=f"{index:02d}> {module.name}",
                 command=lambda key=module.panel_key: self._expand_parameter_panel(key),
                 anchor="w",
                 relief="flat",
@@ -1522,11 +1518,15 @@ class ImageConverterApp:
                 fg=title_fg,
                 activebackground="#111827",
                 activeforeground=title_fg,
-                font=("Consolas", 9),
+                font=("Consolas", 8),
+                width=14,
             )
-            title.pack(side="left", fill="x", expand=True)
+            module_button.pack(side="left")
+            Label(row, text=" | ", fg="#64748b", bg="#050505", font=("Consolas", 8)).pack(side="left")
+            Label(row, text=module.summary, fg="#cbd5e1", bg="#050505", font=("Consolas", 8), anchor="w").pack(side="left", fill="x", expand=True)
             status_text = self._workflow_status_text(module.id, status)
-            Label(row, text=status_text, anchor="e", fg=marker_fg, bg="#050505", font=("Consolas", 9, "bold"), width=8).pack(side="right")
+            if status_text:
+                Label(row, text=f" {status_text}", anchor="w", fg=marker_fg, bg="#050505", font=("Consolas", 8, "bold")).pack(side="left")
             self.workflow_cards[module.id] = row
 
     def _workflow_status_text(self, module_id: str, status: str) -> str:
@@ -2967,6 +2967,7 @@ class ImageConverterApp:
         enabled_ids = {module.id for module in self._workflow_modules() if module.enabled}
         for module_id in enabled_ids:
             self.workflow_module_status[module_id] = "waiting"
+            self.workflow_module_progress[module_id] = percent
         for step in steps[:current_index]:
             if step.module_id in enabled_ids:
                 self.workflow_module_status[step.module_id] = "done"
@@ -3052,8 +3053,6 @@ class ImageConverterApp:
                         (f"，耗时 {elapsed:.1f} 秒。报告：{report_path}", False),
                     ])
                     self._set_task_status("-", "✓ 本次任务已完成", "100%")
-                    if hasattr(self, "task_open_output_button"):
-                        self.task_open_output_button.pack(side="right")
                     for module in self._workflow_modules():
                         if module.enabled and module.id not in self.workflow_module_error:
                             self.workflow_module_status[module.id] = "done"
