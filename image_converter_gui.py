@@ -228,6 +228,7 @@ class ImageConverterApp:
         self.workflow_seen_module_ids: set[str] = set()
         self.workflow_typing_limits: dict[str, int] = {}
         self.workflow_typing_after_id: str | None = None
+        self.grid_status_refresh_after_id: str | None = None
         self.task_ui_after_id: str | None = None
         self.last_task_ui_update = 0.0
         self.current_processing_steps: list[ProcessingStep] = []
@@ -1504,10 +1505,14 @@ class ImageConverterApp:
         self.workflow_cursor_label = None
         modules = [module for module in self._workflow_modules() if module.enabled]
         module_ids = {module.id for module in modules}
-        for module in modules:
-            if module.id not in self.workflow_seen_module_ids:
-                self.workflow_typing_limits[module.id] = 1
-        self.workflow_seen_module_ids = module_ids
+        first_workflow_render = bool(modules) and not self.workflow_seen_module_ids and not self.workflow_typing_limits
+        if first_workflow_render:
+            self.workflow_seen_module_ids = module_ids
+        else:
+            for module in modules:
+                if module.id not in self.workflow_seen_module_ids:
+                    self.workflow_typing_limits[module.id] = 1
+            self.workflow_seen_module_ids = module_ids
         for module_id in list(self.workflow_typing_limits):
             if module_id not in module_ids:
                 self.workflow_typing_limits.pop(module_id, None)
@@ -1530,7 +1535,7 @@ class ImageConverterApp:
             limit = self.workflow_typing_limits.get(module.id, total_len)
             remaining = limit
             remaining = self._terminal_label_limited(row, f"{index:02d}>", "#38bdf8" if status != "done" else "#94a3b8", remaining, bold=True)
-            name_label, remaining = self._terminal_label_limited(row, f" {module.name}", title_fg, remaining, bold=True, return_label=True)
+            name_label, remaining = self._terminal_label_limited(row, f" {module.name}", self._workflow_module_color(module.id, status, title_fg), remaining, bold=True, return_label=True)
             row.bind("<Button-1>", lambda _e, key=module.panel_key: self._expand_parameter_panel(key))
             if name_label:
                 name_label.bind("<Button-1>", lambda _e, key=module.panel_key: self._expand_parameter_panel(key))
@@ -1579,14 +1584,14 @@ class ImageConverterApp:
             total_len = len(f"{index:02d}> {module.name} | {module.summary} {status_text}")
             limit = self.workflow_typing_limits.get(module.id)
             if limit is not None and limit < total_len:
-                self.workflow_typing_limits[module.id] = min(total_len, limit + 2)
+                self.workflow_typing_limits[module.id] = min(total_len, limit + 6)
                 active = True
             elif limit is not None:
                 self.workflow_typing_limits.pop(module.id, None)
         if active:
             if self.workflow_typing_after_id:
                 self.root.after_cancel(self.workflow_typing_after_id)
-            self.workflow_typing_after_id = self.root.after(35, self._render_workflow_cards)
+            self.workflow_typing_after_id = self.root.after(90, self._render_workflow_cards)
         else:
             self.workflow_typing_after_id = None
 
@@ -1670,6 +1675,17 @@ class ImageConverterApp:
         if status == "disabled":
             return "○", "#4b5563", "#050505", "#6b7280"
         return "○", "#6b7280", "#050505", "#9ca3af"
+
+    @staticmethod
+    def _workflow_module_color(module_id: str, status: str, fallback: str) -> str:
+        if status == "failed":
+            return "#fecaca"
+        return {
+            "format": "#93c5fd",
+            "size": "#67e8f9",
+            "rename": "#c4b5fd",
+            "watermark": "#f9a8d4",
+        }.get(module_id, fallback)
 
     def choose_output(self) -> None:
         folder = filedialog.askdirectory(title="选择输出文件夹")
@@ -3063,7 +3079,9 @@ class ImageConverterApp:
             self._sync_workflow_module_status(steps, current_index, status, error, percent)
             if new_active != self.active_workflow_module_id:
                 self.active_workflow_module_id = new_active
-            self._schedule_workflow_render()
+                self._schedule_workflow_render()
+            elif status == "failed":
+                self._schedule_workflow_render()
         if status == "failed":
             current_step = f"失败：{error or current_step}"
         self.task_current_file_text.set(f"当前文件：{current_file}")
@@ -3086,7 +3104,6 @@ class ImageConverterApp:
                 self.workflow_module_progress[module_id] = percent
                 if status == "failed":
                     self.workflow_module_error[module_id] = error
-        self._schedule_workflow_render()
 
     def _render_current_steps(self, steps: list[ProcessingStep], current_index: int, completed_steps: int, status: str) -> None:
         if not hasattr(self, "task_step_labels"):
@@ -3123,12 +3140,17 @@ class ImageConverterApp:
                 label.config(text="", fg="#98a2b3")
 
     def _refresh_job_card_by_key(self, source_key: str) -> None:
-        for idx, job in enumerate(self.jobs):
-            if self._source_key(job.source) == source_key:
-                self._populate_grid()
-                if job.tree_id:
-                    self.tree.item(job.tree_id, image=self.tree_icons[("file", "checked" if job.selected else "unchecked")])
+        for job in self.jobs:
+            if self._source_key(job.source) == source_key and job.tree_id:
+                self.tree.item(job.tree_id, image=self.tree_icons[("file", "checked" if job.selected else "unchecked")])
                 break
+        if self.grid_status_refresh_after_id:
+            return
+        self.grid_status_refresh_after_id = self.root.after(300, self._refresh_grid_status_batch)
+
+    def _refresh_grid_status_batch(self) -> None:
+        self.grid_status_refresh_after_id = None
+        self._populate_grid()
 
     def _drain_events(self) -> None:
         try:
