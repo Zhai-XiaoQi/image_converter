@@ -881,8 +881,8 @@ class ImageConverterApp:
         Label(self.task_line_frame, textvariable=self.task_progress_text, anchor="w").pack(side="left")
         self._set_status_message("请选择图片或文件夹。")
 
-        bottom = Frame(main, height=44)
-        bottom.pack(fill="x", pady=(4, 8))
+        bottom = Frame(main, height=32)
+        bottom.pack(fill="x", pady=(2, 4))
         bottom.pack_propagate(False)
         self.progress = self.workflow_progress
         self.start_button = Button(
@@ -896,7 +896,7 @@ class ImageConverterApp:
             activeforeground="white",
             font=("Microsoft YaHei UI", 10, "bold"),
         )
-        self.start_button.pack(side="right", fill="y", padx=(10, 0), pady=(4, 4))
+        self.start_button.pack(side="right", fill="y", padx=(10, 0), pady=(2, 2))
         for drop_widget in (preview, self.tree, self.grid_canvas):
             self._enable_batch_drop(drop_widget)
         self._build_single_editor_tab(module_font)
@@ -1523,11 +1523,29 @@ class ImageConverterApp:
             )
             module_button.pack(side="left")
             Label(row, text=" | ", fg="#64748b", bg="#050505", font=("Consolas", 8)).pack(side="left")
-            Label(row, text=module.summary, fg="#cbd5e1", bg="#050505", font=("Consolas", 8), anchor="w").pack(side="left", fill="x", expand=True)
+            summary_frame = Frame(row, bg="#050505")
+            summary_frame.pack(side="left", fill="x", expand=True)
+            self._pack_terminal_summary(summary_frame, module.summary)
             status_text = self._workflow_status_text(module.id, status)
             if status_text:
                 Label(row, text=f" {status_text}", anchor="w", fg=marker_fg, bg="#050505", font=("Consolas", 8, "bold")).pack(side="left")
             self.workflow_cards[module.id] = row
+
+    def _pack_terminal_summary(self, parent: Frame, text: str) -> None:
+        pattern = re.compile(r"(JPG|PNG|WEBP|BMP|TIFF|HEIC|HEIF|\\d+x\\d+|\\d+%|#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})|\\d+KB)")
+        parts = pattern.split(text)
+        for part in parts:
+            if not part:
+                continue
+            is_value = bool(pattern.fullmatch(part))
+            Label(
+                parent,
+                text=part,
+                fg="#facc15" if is_value else "#cbd5e1",
+                bg="#050505",
+                font=("Consolas", 8, "bold" if is_value else "normal"),
+                anchor="w",
+            ).pack(side="left")
 
     def _workflow_status_text(self, module_id: str, status: str) -> str:
         if status == "running":
@@ -2955,7 +2973,7 @@ class ImageConverterApp:
             self._sync_workflow_module_status(steps, current_index, status, error, percent)
             if new_active != self.active_workflow_module_id:
                 self.active_workflow_module_id = new_active
-                self._schedule_workflow_render()
+            self._schedule_workflow_render()
         if status == "failed":
             current_step = f"失败：{error or current_step}"
         self.task_current_file_text.set(f"当前文件：{current_file}")
