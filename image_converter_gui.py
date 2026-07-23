@@ -49,6 +49,7 @@ SUPPORTED_INPUTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", "
 SKIP_DIR_NAMES = {"渐进式JPG", "AI_language_check_contact_sheets", "AI_language_text_check_sheets", "AI_language_category_sheets"}
 PRESETS_FILE = Path(__file__).with_name("image_converter_presets.json")
 INVALID_FILENAME_CHARS = r'<>:"/\|?*'
+APP_VERSION = "v1.4.4"
 DEFAULT_PRESETS = {
     "Amazon主图优化": {
         "output_format": "jpg",
@@ -150,7 +151,7 @@ class ConvertJob:
 class ImageConverterApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
-        self.root.title("图片格式转换工具")
+        self.root.title(f"图片格式转换工具 {APP_VERSION}")
         self.default_window_size = (1900, 1040)
         self.root.minsize(1500, 820)
 
@@ -408,6 +409,15 @@ class ImageConverterApp:
         style.configure("File.Treeview.Heading", font=module_font)
         style.configure("TNotebook.Tab", font=("Microsoft YaHei UI", 12, "bold"), padding=(18, 8))
         style.map("File.Treeview", background=[("selected", "#dcecff")])
+
+        header = Frame(self.root)
+        header.pack(fill="x", padx=12, pady=(8, 0))
+        Label(
+            header,
+            text=f"图片格式转换工具 {APP_VERSION}",
+            font=("Microsoft YaHei UI", 10, "bold"),
+            fg="#0b5cad",
+        ).pack(side="left")
 
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True)
