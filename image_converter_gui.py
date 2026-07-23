@@ -49,7 +49,7 @@ SUPPORTED_INPUTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", "
 SKIP_DIR_NAMES = {"渐进式JPG", "AI_language_check_contact_sheets", "AI_language_text_check_sheets", "AI_language_category_sheets"}
 PRESETS_FILE = Path(__file__).with_name("image_converter_presets.json")
 INVALID_FILENAME_CHARS = r'<>:"/\|?*'
-APP_VERSION = "v1.4.4"
+APP_VERSION = "v1.4.5"
 DEFAULT_PRESETS = {
     "Amazon主图优化": {
         "output_format": "jpg",
@@ -222,6 +222,11 @@ class ImageConverterApp:
         self.watermark_custom_y = DoubleVar(value=-1.0)
         self.heic_notice = StringVar(value="")
         self.preset_summary = StringVar(value="选择预设后会自动回填格式、尺寸和处理规则。")
+        self.workflow_format_text = StringVar(value="")
+        self.workflow_size_text = StringVar(value="")
+        self.workflow_rename_text = StringVar(value="")
+        self.workflow_watermark_text = StringVar(value="")
+        self.workflow_stats_text = StringVar(value="")
         self.preview_zoom = IntVar(value=100)
         self.preview_zoom_text = StringVar(value="100%")
         self.search_text = StringVar(value="")
@@ -413,7 +418,7 @@ class ImageConverterApp:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True)
         main = Frame(self.notebook, padx=12, pady=12)
-        self.notebook.add(main, text="批量转换")
+        self.notebook.add(main, text="批量自动化")
 
         body = Frame(main)
         body.pack(fill="both", expand=True)
@@ -421,7 +426,7 @@ class ImageConverterApp:
         left_col = Frame(body)
         left_col.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
-        settings_shell = LabelFrame(body, text="批量处理设置", font=module_font, width=560)
+        settings_shell = LabelFrame(body, text="自动化工作流", font=module_font, width=560)
         settings_shell.pack(side="right", fill="y")
         settings_shell.pack_propagate(False)
         opts = Frame(settings_shell)
@@ -506,6 +511,23 @@ class ImageConverterApp:
         self.grid_canvas.bind("<MouseWheel>", self._on_grid_mousewheel)
         self.grid_inner.bind("<MouseWheel>", self._on_grid_mousewheel)
         panes.add(grid_outer, minsize=760)
+
+        workflow_box = LabelFrame(opts, text="当前处理流程", font=section_font)
+        workflow_box.pack(fill="x", pady=(0, 6))
+        for text_var in (
+            self.workflow_format_text,
+            self.workflow_size_text,
+            self.workflow_rename_text,
+            self.workflow_watermark_text,
+        ):
+            Label(workflow_box, textvariable=text_var, anchor="w", font=("Microsoft YaHei UI", 9)).pack(fill="x", padx=10, pady=(3, 0))
+        Label(
+            workflow_box,
+            textvariable=self.workflow_stats_text,
+            anchor="w",
+            fg="#0b5cad",
+            font=("Microsoft YaHei UI", 9, "bold"),
+        ).pack(fill="x", padx=10, pady=(3, 7))
 
         preset_box = LabelFrame(opts, labelwidget=self._make_section_label("批量尺寸", self.resize_enabled, self._on_resize_mode_change), font=section_font)
         preset_box.pack(fill="x", pady=(0, 6))
@@ -726,6 +748,13 @@ class ImageConverterApp:
             var.trace_add("write", lambda *_args: self._schedule_scan())
         for var in (self.rename_start, self.resize_width, self.resize_height, self.resize_scale_percent):
             var.trace_add("write", lambda *_args: self._schedule_scan())
+        for var in (
+            self.progressive_jpg, self.alpha_bg, self.quality, self.compression_mode,
+            self.compression_enabled, self.format_conversion_enabled, self.size_compress_enabled,
+            self.rename_enabled, self.watermark_enabled, self.watermark_type, self.watermark_position,
+            self.watermark_opacity,
+        ):
+            var.trace_add("write", lambda *_args: self._update_workflow_summary())
 
         self.status_frame = Frame(main, height=26)
         self.status_frame.pack(fill="x", pady=(6, 0))
@@ -1157,6 +1186,58 @@ class ImageConverterApp:
             self.heic_notice.set("HEIC 需安装 pillow-heif")
         else:
             self.heic_notice.set("")
+        self._update_workflow_summary()
+
+    def _update_workflow_summary(self) -> None:
+        out_format = self.output_format.get().upper()
+        if self.format_conversion_enabled.get():
+            format_bits = [out_format]
+            if self.output_format.get() == "jpg" and self.progressive_jpg.get():
+                format_bits.append("渐进式")
+            if self.output_format.get() == "jpg":
+                format_bits.append(f"背景 {self.alpha_bg.get()}")
+            self.workflow_format_text.set(f"开启 格式转换：{' / '.join(format_bits)}")
+        else:
+            self.workflow_format_text.set("关闭 格式转换：保留原格式")
+
+        if self.size_compress_enabled.get():
+            size_part = "不改变尺寸"
+            if self.resize_enabled.get():
+                if self.resize_mode.get() == "scale":
+                    size_part = f"缩放 {self._safe_int_var(self.resize_scale_percent, 100)}%"
+                elif self.resize_mode.get() == "exact":
+                    fit_map = {"stretch": "拉伸", "pad": "等比留白", "crop": "等比裁剪"}
+                    fit = fit_map.get(self.resize_fit_mode.get(), self.resize_fit_mode.get())
+                    size_part = f"{self._safe_int_var(self.resize_width, 0)} x {self._safe_int_var(self.resize_height, 0)} / {fit}"
+            if self.compression_enabled.get():
+                if self.compression_mode.get() == "target":
+                    compress_part = f"目标体积 {self.target_size.get() or '-'} KB"
+                else:
+                    compress_part = f"质量 {self._safe_int_var(self.quality, 92)}%"
+            else:
+                compress_part = "不压缩"
+            self.workflow_size_text.set(f"开启 尺寸 / 压缩：{size_part} / {compress_part}")
+        else:
+            self.workflow_size_text.set("关闭 尺寸 / 压缩")
+
+        if self.rename_enabled.get():
+            template = self.rename_template.get() or "{name}"
+            rules = len(self._combined_rename_replace_rules())
+            self.workflow_rename_text.set(f"开启 重命名：{template} / 替换 {rules} 条")
+        else:
+            self.workflow_rename_text.set("关闭 重命名")
+
+        if self.watermark_enabled.get():
+            wm_type = "文字" if self.watermark_type.get() == "text" else "Logo"
+            self.workflow_watermark_text.set(
+                f"开启 水印：{wm_type} / {self.watermark_position.get()} / {self._safe_int_var(self.watermark_opacity, 45)}%"
+            )
+        else:
+            self.workflow_watermark_text.set("关闭 水印")
+
+        total = len(self.jobs)
+        selected = sum(1 for job in self.jobs if job.selected)
+        self.workflow_stats_text.set(f"任务统计：已选择 {selected} / 总计 {total} 张")
 
     def choose_output(self) -> None:
         folder = filedialog.askdirectory(title="选择输出文件夹")
@@ -1777,6 +1858,7 @@ class ImageConverterApp:
         return bool(states) and all(states)
 
     def _update_selected_status(self) -> None:
+        self._update_workflow_summary()
         if self.target_conflict_error:
             self._set_status_parts([
                 ("目标文件冲突：", False),
@@ -2162,7 +2244,7 @@ class ImageConverterApp:
 
     def _build_single_editor_tab(self, module_font) -> None:
         page = Frame(self.notebook, padx=12, pady=12)
-        self.notebook.add(page, text="单图处理")
+        self.notebook.add(page, text="图片编辑")
         top_area = Frame(page)
         top_area.pack(fill="x")
         top = LabelFrame(top_area, text="单图输入", font=module_font)
