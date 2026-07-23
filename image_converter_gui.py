@@ -223,6 +223,8 @@ class ImageConverterApp:
         self.workflow_module_error: dict[str, str] = {}
         self.workflow_cursor_on = True
         self.workflow_cursor_label: Label | None = None
+        self.workflow_cursor_text_label: Label | None = None
+        self.workflow_cursor_status = "idle 0%"
         self.task_ui_after_id: str | None = None
         self.last_task_ui_update = 0.0
         self.current_processing_steps: list[ProcessingStep] = []
@@ -622,7 +624,7 @@ class ImageConverterApp:
         self.workflow_canvas.bind("<MouseWheel>", self._on_workflow_mousewheel)
         self.workflow_cards_frame.bind("<MouseWheel>", self._on_workflow_mousewheel)
         self.workflow_progress = ttk.Progressbar(workflow_box, mode="determinate")
-        self.workflow_progress.pack(fill="x", padx=8, pady=(1, 0))
+        self.workflow_progress.pack(fill="x", padx=(8, 24), pady=(1, 0))
         Label(
             workflow_box,
             textvariable=self.workflow_stats_text,
@@ -870,15 +872,14 @@ class ImageConverterApp:
         ):
             var.trace_add("write", lambda *_args: self._update_workflow_summary())
 
-        self.status_frame = Frame(main, height=38)
-        self.status_frame.pack(fill="x", pady=(3, 2))
+        self.status_frame = Frame(main, height=24)
+        self.status_frame.pack(fill="x", pady=(2, 2))
         self.status_frame.pack_propagate(False)
         status_content = Frame(self.status_frame)
         status_content.pack(fill="both", expand=True)
         status_left = Frame(status_content)
         status_left.pack(side="left", fill="both", expand=True)
         self.status_line_frame = Frame(status_left)
-        self.status_line_frame.pack(fill="x")
         self.task_line_frame = Frame(status_left)
         self.task_line_frame.pack(fill="x", pady=(1, 0))
         Label(self.task_line_frame, textvariable=self.task_current_file_text, anchor="w", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left")
@@ -1543,6 +1544,8 @@ class ImageConverterApp:
         row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg="#050505", padx=6, pady=0)
         row.pack(fill="x")
         self._terminal_label(row, "C:\\workflow> ", "#22c55e", bold=True)
+        self.workflow_cursor_text_label = self._terminal_label(row, self.workflow_cursor_status, "#38bdf8", bold=True)
+        self._terminal_label(row, " ", "#050505")
         self.workflow_cursor_label = self._terminal_label(row, "█", "#22c55e", bold=True)
 
     def _blink_workflow_cursor(self) -> None:
@@ -1554,6 +1557,15 @@ class ImageConverterApp:
         except TclError:
             pass
         self.root.after(520, self._blink_workflow_cursor)
+
+    def _set_workflow_cursor_status(self, text: str) -> None:
+        self.workflow_cursor_status = text
+        label = getattr(self, "workflow_cursor_text_label", None)
+        try:
+            if label is not None and label.winfo_exists():
+                label.config(text=text)
+        except TclError:
+            pass
 
     def _pack_terminal_summary(self, parent: Frame, text: str) -> None:
         pattern = re.compile(r"(JPG质量\d+%|质量\d+%|目标\d+KB|JPG|PNG|WEBP|BMP|TIFF|HEIC|HEIF|\d+x\d+|\d+%|#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})|\d+KB)")
@@ -2372,6 +2384,7 @@ class ImageConverterApp:
         total_steps = sum(len(self._processing_steps_for_job(job)) for job in selected_jobs)
         self.progress.config(value=0, maximum=max(1, total_steps))
         self._set_task_status("-", "等待开始转换", "0%")
+        self._set_workflow_cursor_status("running 0%")
         self._reset_workflow_run_state()
         self._set_status_message("开始转换...")
         self.start_button.config(state="disabled", text="转换中 0%")
@@ -3069,6 +3082,7 @@ class ImageConverterApp:
                     completed_steps, total_steps, index, total, ok, failed, skipped = payload  # type: ignore[misc]
                     self.progress.config(value=completed_steps, maximum=max(1, total_steps))
                     percent = int(completed_steps * 100 / max(1, total_steps))
+                    self._set_workflow_cursor_status(f"running {percent}%")
                     self.start_button.config(state="disabled", text=f"转换中 {percent}%")
                     self._set_status_parts([
                         ("处理中 ", False), (f"{index}/{total}", True),
@@ -3088,6 +3102,7 @@ class ImageConverterApp:
                         (f"，耗时 {elapsed:.1f} 秒。报告：{report_path}", False),
                     ])
                     self._set_task_status("-", "✓ 本次任务已完成", "100%")
+                    self._set_workflow_cursor_status("done 100%")
                     for module in self._workflow_modules():
                         if module.enabled and module.id not in self.workflow_module_error:
                             self.workflow_module_status[module.id] = "done"
