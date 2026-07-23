@@ -218,6 +218,7 @@ class ImageConverterApp:
             "rename": "waiting",
             "watermark": "waiting",
         }
+        self.workflow_module_progress: dict[str, int] = {}
         self.workflow_module_error: dict[str, str] = {}
         self.task_ui_after_id: str | None = None
         self.last_task_ui_update = 0.0
@@ -340,20 +341,7 @@ class ImageConverterApp:
                         self.presets[name] = values
 
     def _preset_names(self) -> list[str]:
-        def display_name(name: str) -> str:
-            values = self.presets.get(name, {})
-            width = int(values.get("resize_width", 0) or 0)
-            height = int(values.get("resize_height", 0) or 0)
-            mode = str(values.get("resize_mode", "none"))
-            if name == "WebP网页图" or mode == "none":
-                return f"{name} - 原尺寸"
-            if mode == "scale":
-                return f"{name} - {int(values.get('resize_scale_percent', 100) or 100)}%"
-            if width and height:
-                return f"{name} - {width} x {height}"
-            return name
-
-        return ["自定义", *(display_name(name) for name in sorted(self.presets.keys()))]
+        return ["自定义", *sorted(self.presets.keys())]
 
     def _preset_summary_text(self, name: str) -> str:
         values = self.presets.get(name)
@@ -375,12 +363,7 @@ class ImageConverterApp:
         return f"已套用：{name} / {out_format} / {size} / 质量 {quality}%"
 
     def _preset_key_from_display(self, display_name: str) -> str:
-        if display_name in self.presets:
-            return display_name
-        for name in self.presets:
-            if display_name.startswith(f"{name} - "):
-                return name
-        return display_name
+        return display_name if display_name in self.presets else display_name
 
     def _capture_preset(self) -> dict[str, object]:
         return {
@@ -435,7 +418,7 @@ class ImageConverterApp:
         values = self.presets.get(name)
         if not values:
             return
-        self.preset_name.set(self._preset_display_name(name))
+        self.preset_name.set(name)
         self.format_conversion_enabled.set(True)
         self.output_format.set(str(values.get("output_format", "jpg")))
         self.quality.set(int(values.get("quality", 92)))
@@ -481,19 +464,6 @@ class ImageConverterApp:
         self._update_control_states()
         self.scan_jobs()
 
-    def _preset_display_name(self, name: str) -> str:
-        values = self.presets.get(name, {})
-        width = int(values.get("resize_width", 0) or 0)
-        height = int(values.get("resize_height", 0) or 0)
-        mode = str(values.get("resize_mode", "none"))
-        if name == "WebP网页图" or mode == "none":
-            return f"{name} - 原尺寸"
-        if mode == "scale":
-            return f"{name} - {int(values.get('resize_scale_percent', 100) or 100)}%"
-        if width and height:
-            return f"{name} - {width} x {height}"
-        return name
-
     def save_current_preset(self) -> None:
         current_key = self._preset_key_from_display(self.preset_name.get())
         initial = current_key if current_key != "自定义" else ""
@@ -511,9 +481,9 @@ class ImageConverterApp:
         self.presets[name] = self._capture_preset()
         PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
         PRESETS_FILE.write_text(json.dumps(self.presets, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.preset_name.set(self._preset_display_name(name))
+        self.preset_name.set(name)
         self.preset_combo.config(values=self._preset_names())
-        messagebox.showinfo("已保存", f"预设已保存：{name}")
+        self.preset_summary.set(f"已保存：{name}")
 
     def _build_ui(self) -> None:
         style = ttk.Style(self.root)
@@ -622,8 +592,20 @@ class ImageConverterApp:
 
         workflow_box = LabelFrame(opts, text="当前处理流程", font=section_font)
         workflow_box.pack(fill="x", pady=(0, 6))
-        self.workflow_cards_frame = Frame(workflow_box)
-        self.workflow_cards_frame.pack(fill="x", padx=8, pady=(6, 2))
+        workflow_list = Frame(workflow_box, height=92)
+        workflow_list.pack(fill="x", padx=8, pady=(6, 2))
+        workflow_list.pack_propagate(False)
+        self.workflow_canvas = Canvas(workflow_list, highlightthickness=0, height=88, bg="#f5f5f5")
+        workflow_scroll = Scrollbar(workflow_list, orient="vertical", command=self.workflow_canvas.yview)
+        self.workflow_canvas.config(yscrollcommand=workflow_scroll.set)
+        self.workflow_canvas.pack(side="left", fill="both", expand=True)
+        workflow_scroll.pack(side="right", fill="y")
+        self.workflow_cards_frame = Frame(self.workflow_canvas, bg="#f5f5f5")
+        self.workflow_window = self.workflow_canvas.create_window((0, 0), window=self.workflow_cards_frame, anchor="nw")
+        self.workflow_cards_frame.bind("<Configure>", self._on_workflow_inner_configure)
+        self.workflow_canvas.bind("<Configure>", self._on_workflow_canvas_configure)
+        self.workflow_canvas.bind("<MouseWheel>", self._on_workflow_mousewheel)
+        self.workflow_cards_frame.bind("<MouseWheel>", self._on_workflow_mousewheel)
         Label(
             workflow_box,
             textvariable=self.workflow_stats_text,
@@ -870,7 +852,7 @@ class ImageConverterApp:
         ):
             var.trace_add("write", lambda *_args: self._update_workflow_summary())
 
-        self.status_frame = Frame(main, height=142)
+        self.status_frame = Frame(main, height=44)
         self.status_frame.pack(fill="x", pady=(6, 0))
         self.status_frame.pack_propagate(False)
         self.status_line_frame = Frame(self.status_frame)
@@ -885,18 +867,7 @@ class ImageConverterApp:
         self.task_open_output_button = Button(self.task_line_frame, text="打开输出目录", command=self.open_output_dir, width=12)
         self.task_open_output_button.pack(side="right")
         self.task_open_output_button.pack_forget()
-        self.task_steps_frame = Frame(self.status_frame, bd=1, relief="solid", bg="#fbfbfb")
-        self.task_steps_frame.pack(fill="x", pady=(4, 0))
-        self.task_fade_top = Label(self.task_steps_frame, text="", fg="#98a2b3", bg="#fbfbfb", anchor="w", height=1)
-        self.task_fade_top.pack(fill="x", padx=8)
-        for _ in range(5):
-            label = Label(self.task_steps_frame, text="", anchor="w", bg="#fbfbfb", fg="#98a2b3", height=1)
-            label.pack(fill="x", padx=8)
-            self.task_step_labels.append(label)
-        self.task_fade_bottom = Label(self.task_steps_frame, text="", fg="#98a2b3", bg="#fbfbfb", anchor="w", height=1)
-        self.task_fade_bottom.pack(fill="x", padx=8)
         self._set_status_message("请选择图片或文件夹。")
-        self._render_current_steps([], 0, 0, "idle")
 
         bottom = Frame(main, height=44)
         bottom.pack(fill="x", pady=(4, 8))
@@ -959,6 +930,21 @@ class ImageConverterApp:
         if hasattr(self, "parameter_canvas"):
             step = -1 if event.delta > 0 else 1
             self.parameter_canvas.yview_scroll(step * 3, "units")
+        return "break"
+
+    def _on_workflow_inner_configure(self, _event=None) -> None:
+        if hasattr(self, "workflow_canvas"):
+            self.workflow_canvas.configure(scrollregion=self.workflow_canvas.bbox("all"))
+
+    def _on_workflow_canvas_configure(self, event) -> None:
+        if hasattr(self, "workflow_window"):
+            self.workflow_canvas.itemconfigure(self.workflow_window, width=event.width)
+            self.workflow_canvas.configure(scrollregion=self.workflow_canvas.bbox("all"))
+
+    def _on_workflow_mousewheel(self, event) -> str:
+        if hasattr(self, "workflow_canvas"):
+            step = -1 if event.delta > 0 else 1
+            self.workflow_canvas.yview_scroll(step * 3, "units")
         return "break"
 
     def _toggle_parameter_panel(self, key: str) -> None:
@@ -1497,29 +1483,24 @@ class ImageConverterApp:
         for child in self.workflow_cards_frame.winfo_children():
             child.destroy()
         self.workflow_cards.clear()
-        modules = self._workflow_modules()
+        modules = [module for module in self._workflow_modules() if module.enabled]
+        if not modules:
+            Label(
+                self.workflow_cards_frame,
+                text="未启用处理模块",
+                fg="#98a2b3",
+                bg="#f5f5f5",
+                anchor="w",
+            ).pack(fill="x", padx=8, pady=4)
+            return
         for index, module in enumerate(modules, start=1):
             status = self._workflow_status_for_module(module)
-            marker, marker_fg, row_bg, title_fg = self._workflow_status_style(status)
-            node = Frame(self.workflow_cards_frame, bg="#f5f5f5")
-            node.pack(fill="x", pady=(0, 1))
-            rail = Frame(node, width=28, bg="#f5f5f5")
-            rail.pack(side="left", fill="y")
-            rail.pack_propagate(False)
-            Label(
-                rail,
-                text=marker,
-                fg=marker_fg,
-                bg="#f5f5f5",
-                font=("Microsoft YaHei UI", 9, "bold"),
-            ).pack(anchor="n", pady=(2, 0))
-            if index < len(modules):
-                Label(rail, text="│", fg="#d0d5dd", bg="#f5f5f5", justify="center").pack(anchor="n")
-            row = Frame(node, bd=0, relief="flat", bg=row_bg, padx=6, pady=3)
-            row.pack(side="left", fill="x", expand=True)
+            _marker, marker_fg, row_bg, title_fg = self._workflow_status_style(status)
+            row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg=row_bg, padx=6, pady=2)
+            row.pack(fill="x", pady=(0, 1))
             title = Button(
                 row,
-                text=f"{self._circled_number(index)} {module.name}",
+                text=f"{self._circled_number(index)} {module.name}  {module.summary}",
                 command=lambda key=module.panel_key: self._expand_parameter_panel(key),
                 anchor="w",
                 relief="flat",
@@ -1527,12 +1508,21 @@ class ImageConverterApp:
                 fg=title_fg,
                 activebackground=row_bg,
                 activeforeground=title_fg,
-                font=("Microsoft YaHei UI", 9, "bold"),
+                font=("Microsoft YaHei UI", 9),
             )
-            title.pack(side="top", fill="x")
-            summary = "正在处理..." if status == "running" else module.summary
-            Label(row, text=summary, anchor="w", fg="#667085", bg=row_bg, wraplength=500, font=("Microsoft YaHei UI", 8)).pack(fill="x")
+            title.pack(side="left", fill="x", expand=True)
+            status_text = self._workflow_status_text(module.id, status)
+            Label(row, text=status_text, anchor="e", fg=marker_fg, bg=row_bg, font=("Microsoft YaHei UI", 9, "bold"), width=8).pack(side="right")
             self.workflow_cards[module.id] = row
+
+    def _workflow_status_text(self, module_id: str, status: str) -> str:
+        if status == "running":
+            return f"{self.workflow_module_progress.get(module_id, 0)}%"
+        if status == "done":
+            return "√"
+        if status == "failed":
+            return "!"
+        return ""
 
     @staticmethod
     def _circled_number(index: int) -> str:
@@ -2339,6 +2329,7 @@ class ImageConverterApp:
     def _reset_workflow_run_state(self) -> None:
         self.active_workflow_module_id = None
         self.workflow_module_error.clear()
+        self.workflow_module_progress.clear()
         for module in self._workflow_modules():
             self.workflow_module_status[module.id] = "waiting" if module.enabled else "disabled"
         self._schedule_workflow_render()
@@ -2941,21 +2932,21 @@ class ImageConverterApp:
             return
         current_file = str(payload.get("file", "-"))
         current_step = steps[current_index].name if steps and 0 <= current_index < len(steps) else "-"
+        percent = int(completed_steps * 100 / max(1, total_steps))
         if steps and 0 <= current_index < len(steps):
             new_active = steps[current_index].module_id
-            self._sync_workflow_module_status(steps, current_index, status, error)
+            self._sync_workflow_module_status(steps, current_index, status, error, percent)
             if new_active != self.active_workflow_module_id:
                 self.active_workflow_module_id = new_active
                 self._schedule_workflow_render()
         if status == "failed":
             current_step = f"失败：{error or current_step}"
-        percent = int(completed_steps * 100 / max(1, total_steps))
         self.task_current_file_text.set(f"当前文件：{current_file}")
         self.task_current_step_text.set(f"当前步骤：{current_step}")
         self.task_progress_text.set(f"总进度：{percent}%")
         self._render_current_steps(steps, current_index, completed_steps, status)
 
-    def _sync_workflow_module_status(self, steps: list[ProcessingStep], current_index: int, status: str, error: str = "") -> None:
+    def _sync_workflow_module_status(self, steps: list[ProcessingStep], current_index: int, status: str, error: str = "", percent: int = 0) -> None:
         enabled_ids = {module.id for module in self._workflow_modules() if module.enabled}
         for module_id in enabled_ids:
             self.workflow_module_status[module_id] = "waiting"
@@ -2966,6 +2957,7 @@ class ImageConverterApp:
             module_id = steps[current_index].module_id
             if module_id in enabled_ids:
                 self.workflow_module_status[module_id] = "failed" if status == "failed" else "running"
+                self.workflow_module_progress[module_id] = percent
                 if status == "failed":
                     self.workflow_module_error[module_id] = error
         self._schedule_workflow_render()
@@ -3048,6 +3040,7 @@ class ImageConverterApp:
                     for module in self._workflow_modules():
                         if module.enabled and module.id not in self.workflow_module_error:
                             self.workflow_module_status[module.id] = "done"
+                            self.workflow_module_progress[module.id] = 100
                     self.active_workflow_module_id = None
                     self._schedule_workflow_render()
                     summary = f"成功 {ok}\n失败 {failed}\n跳过 {skipped}\n未选 {unselected}\n耗时 {elapsed:.1f} 秒\n\n报告：{report_path}"
