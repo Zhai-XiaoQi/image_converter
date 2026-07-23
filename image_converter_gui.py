@@ -211,11 +211,21 @@ class ImageConverterApp:
         self.parameter_toggle_buttons: dict[str, Button] = {}
         self.workflow_ui_after_id: str | None = None
         self.active_workflow_module_id: str | None = None
+        self.workflow_module_status: dict[str, str] = {
+            "format": "waiting",
+            "size": "waiting",
+            "rename": "waiting",
+            "watermark": "waiting",
+        }
+        self.workflow_module_error: dict[str, str] = {}
         self.task_ui_after_id: str | None = None
         self.last_task_ui_update = 0.0
         self.current_processing_steps: list[ProcessingStep] = []
         self.current_processing_index = 0
         self.processing_step_states: dict[str, str] = {}
+        self.task_step_labels: list[Label] = []
+        self.task_fade_top: Label | None = None
+        self.task_fade_bottom: Label | None = None
         self.task_stats = {
             "total_steps": 0,
             "completed_steps": 0,
@@ -836,19 +846,33 @@ class ImageConverterApp:
         ):
             var.trace_add("write", lambda *_args: self._update_workflow_summary())
 
-        self.status_frame = Frame(main, height=54)
+        self.status_frame = Frame(main, height=142)
         self.status_frame.pack(fill="x", pady=(6, 0))
         self.status_frame.pack_propagate(False)
         self.status_line_frame = Frame(self.status_frame)
         self.status_line_frame.pack(fill="x")
         self.task_line_frame = Frame(self.status_frame)
         self.task_line_frame.pack(fill="x", pady=(2, 0))
-        Label(self.task_line_frame, textvariable=self.task_current_file_text, anchor="w").pack(side="left")
+        Label(self.task_line_frame, textvariable=self.task_current_file_text, anchor="w", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left")
         Label(self.task_line_frame, text="  |  ").pack(side="left")
         Label(self.task_line_frame, textvariable=self.task_current_step_text, anchor="w", fg="#0b5cad", font=self.status_number_font).pack(side="left")
         Label(self.task_line_frame, text="  |  ").pack(side="left")
         Label(self.task_line_frame, textvariable=self.task_progress_text, anchor="w").pack(side="left")
+        self.task_open_output_button = Button(self.task_line_frame, text="打开输出目录", command=self.open_output_dir, width=12)
+        self.task_open_output_button.pack(side="right")
+        self.task_open_output_button.pack_forget()
+        self.task_steps_frame = Frame(self.status_frame, bd=1, relief="solid", bg="#fbfbfb")
+        self.task_steps_frame.pack(fill="x", pady=(4, 0))
+        self.task_fade_top = Label(self.task_steps_frame, text="", fg="#98a2b3", bg="#fbfbfb", anchor="w", height=1)
+        self.task_fade_top.pack(fill="x", padx=8)
+        for _ in range(5):
+            label = Label(self.task_steps_frame, text="", anchor="w", bg="#fbfbfb", fg="#98a2b3", height=1)
+            label.pack(fill="x", padx=8)
+            self.task_step_labels.append(label)
+        self.task_fade_bottom = Label(self.task_steps_frame, text="", fg="#98a2b3", bg="#fbfbfb", anchor="w", height=1)
+        self.task_fade_bottom.pack(fill="x", padx=8)
         self._set_status_message("请选择图片或文件夹。")
+        self._render_current_steps([], 0, 0, "idle")
 
         bottom = Frame(main, height=44)
         bottom.pack(fill="x", pady=(4, 8))
@@ -990,9 +1014,13 @@ class ImageConverterApp:
         self.task_current_file_text.set(f"当前文件：{current_file or '-'}")
         self.task_current_step_text.set(f"当前步骤：{current_step or '等待开始转换'}")
         self.task_progress_text.set(f"总进度：{progress_text}")
+        if hasattr(self, "task_open_output_button"):
+            self.task_open_output_button.pack_forget()
 
     def _update_start_button_state(self) -> None:
         if not hasattr(self, "start_button"):
+            return
+        if self.worker and self.worker.is_alive():
             return
         state = "disabled" if self.target_conflict_error else "normal"
         selected = sum(1 for job in self.jobs if job.selected)
@@ -1408,44 +1436,77 @@ class ImageConverterApp:
         for child in self.workflow_cards_frame.winfo_children():
             child.destroy()
         self.workflow_cards.clear()
-        enabled_modules = [module for module in self._workflow_modules() if module.enabled]
-        if not enabled_modules:
-            Label(self.workflow_cards_frame, text="未启用处理模块，当前仅扫描和预览图片。", fg="#666", anchor="w").pack(fill="x", pady=3)
-            return
-        for index, module in enumerate(enabled_modules, start=1):
-            active = module.id == self.active_workflow_module_id
+        modules = self._workflow_modules()
+        for index, module in enumerate(modules, start=1):
+            status = self._workflow_status_for_module(module)
+            marker, marker_fg, card_bg, title_fg = self._workflow_status_style(status)
             node = Frame(self.workflow_cards_frame, bg="#f5f5f5")
-            node.pack(fill="x", pady=(0, 4))
-            rail = Frame(node, width=28, bg="#f5f5f5")
+            node.pack(fill="x", pady=(0, 2))
+            rail = Frame(node, width=38, bg="#f5f5f5")
             rail.pack(side="left", fill="y")
             rail.pack_propagate(False)
             Label(
                 rail,
-                text=str(index),
-                fg="#0b5cad" if active else "#98a2b3",
+                text=marker,
+                fg=marker_fg,
                 bg="#f5f5f5",
-                font=("Microsoft YaHei UI", 9, "bold" if active else "normal"),
-            ).pack(anchor="n", pady=(5, 0))
-            if index < len(enabled_modules):
-                Label(rail, text="│", fg="#d0d5dd", bg="#f5f5f5").pack(anchor="n")
-            card_bg = "#eaf3ff" if active else "#ffffff"
-            card_fg = "#0b5cad" if active else "#344054"
-            card = Frame(node, bd=1, relief="solid", bg=card_bg, padx=8, pady=5)
+                font=("Microsoft YaHei UI", 12, "bold"),
+            ).pack(anchor="n", pady=(6, 0))
+            if index < len(modules):
+                Label(rail, text="│\n▼", fg="#c7ccd1", bg="#f5f5f5", justify="center").pack(anchor="n")
+            card = Frame(
+                node,
+                bd=0,
+                relief="flat",
+                bg=card_bg,
+                padx=10,
+                pady=6,
+                highlightthickness=1,
+                highlightbackground="#d7dce2" if status == "running" else "#e5e7eb",
+                highlightcolor="#0b5cad" if status == "running" else "#e5e7eb",
+            )
             card.pack(side="left", fill="x", expand=True)
             Button(
                 card,
-                text=module.name,
+                text=f"{self._circled_number(index)} {module.name}",
                 command=lambda key=module.panel_key: self._expand_parameter_panel(key),
                 anchor="w",
                 relief="flat",
                 bg=card_bg,
-                fg=card_fg,
+                fg=title_fg,
                 activebackground=card_bg,
-                activeforeground=card_fg,
-                font=("Microsoft YaHei UI", 9, "bold" if active else "normal"),
+                activeforeground=title_fg,
+                font=("Microsoft YaHei UI", 9, "bold"),
             ).pack(fill="x")
-            Label(card, text=module.summary, anchor="w", fg="#475467", bg=card_bg, wraplength=500).pack(fill="x", pady=(2, 0))
+            summary = "正在处理..." if status == "running" else module.summary
+            Label(card, text=summary, anchor="w", fg="#667085", bg=card_bg, wraplength=500).pack(fill="x", pady=(2, 0))
             self.workflow_cards[module.id] = card
+
+    @staticmethod
+    def _circled_number(index: int) -> str:
+        numbers = "①②③④⑤⑥⑦⑧⑨"
+        if 1 <= index <= len(numbers):
+            return numbers[index - 1]
+        return str(index)
+
+    def _workflow_status_for_module(self, module: WorkflowModule) -> str:
+        if not module.enabled:
+            return "disabled"
+        if module.id in self.workflow_module_error:
+            return "failed"
+        return self.workflow_module_status.get(module.id, "waiting")
+
+    @staticmethod
+    def _workflow_status_style(status: str) -> tuple[str, str, str, str]:
+        if status == "running":
+            return "●", "#0b5cad", "#eaf3ff", "#0b5cad"
+        if status == "done":
+            return "✓", "#667085", "#ffffff", "#344054"
+        if status == "failed":
+            return "!", "#b42318", "#fff4f2", "#b42318"
+        if status == "disabled":
+            return "○", "#c7ccd1", "#ffffff", "#667085"
+        return "○", "#98a2b3", "#ffffff", "#344054"
 
     def choose_output(self) -> None:
         folder = filedialog.askdirectory(title="选择输出文件夹")
@@ -1824,6 +1885,8 @@ class ImageConverterApp:
         top.pack(fill="x")
         Checkbutton(top, variable=var, command=lambda i=idx: self._set_job_selected(i, self.card_vars[i].get()), bg="#f5f5f5", activebackground="#eaf3ff").pack(side="left")
         Button(top, text="编辑", command=lambda i=idx: self.load_single_image(self.jobs[i].source), width=6).pack(side="right")
+        badge_text, badge_fg = self._job_status_badge(job)
+        Label(top, text=badge_text, fg=badge_fg, bg="#f5f5f5", font=("Microsoft YaHei UI", 11, "bold")).pack(side="right", padx=(0, 8))
         thumb = self._get_thumbnail(job.source, thumb_size)
         image_label = Label(card, image=thumb, width=image_size[0], height=image_size[1], bg="#f7f7f4")
         image_label.image = thumb  # type: ignore[attr-defined]
@@ -1841,9 +1904,6 @@ class ImageConverterApp:
         if job.status == "failed":
             status_label.config(text="失败：点击查看原因")
             status_label.pack()
-        elif job.status == "done":
-            status_label.config(text="已完成", fg="#667085")
-            status_label.pack()
         elif job.status == "skipped":
             status_label.config(text="已跳过", fg="#9a6400")
             status_label.pack()
@@ -1855,6 +1915,18 @@ class ImageConverterApp:
         image_label.bind("<Double-Button-1>", lambda _e, i=idx: self._open_card_editor(i))
         for widget in [card, top, image_label, *card.winfo_children()]:
             widget.bind("<MouseWheel>", self._on_grid_mousewheel, add="+")
+
+    @staticmethod
+    def _job_status_badge(job: ConvertJob) -> tuple[str, str]:
+        if job.status == "done":
+            return "✓", "#667085"
+        if job.status == "running":
+            return "●", "#0b5cad"
+        if job.status == "failed":
+            return "!", "#b42318"
+        if job.status == "skipped":
+            return "○", "#9a6400"
+        return "○", "#98a2b3"
 
     @staticmethod
     def _source_format_label(path: Path) -> str:
@@ -2206,9 +2278,18 @@ class ImageConverterApp:
         total_steps = sum(len(self._processing_steps_for_job(job)) for job in selected_jobs)
         self.progress.config(value=0, maximum=max(1, total_steps))
         self._set_task_status("-", "等待开始转换", "0%")
+        self._reset_workflow_run_state()
         self._set_status_message("开始转换...")
+        self.start_button.config(state="disabled", text="转换中 0%")
         self.worker = threading.Thread(target=self._convert_worker, args=(selected_jobs,), daemon=True)
         self.worker.start()
+
+    def _reset_workflow_run_state(self) -> None:
+        self.active_workflow_module_id = None
+        self.workflow_module_error.clear()
+        for module in self._workflow_modules():
+            self.workflow_module_status[module.id] = "waiting" if module.enabled else "disabled"
+        self._schedule_workflow_render()
 
     def _validate_selected_targets(self, selected_jobs: list[ConvertJob]) -> str:
         seen: dict[Path, Path] = {}
@@ -2253,6 +2334,9 @@ class ImageConverterApp:
         for index, job in enumerate(selected_jobs, start=1):
             steps = self._processing_steps_for_job(job)
             step_index = 0
+            job.status = "running"
+            job.message = ""
+            self.events.put(("job_status", self._source_key(job.source)))
 
             def emit(step_id: str, force: bool = True) -> None:
                 nonlocal step_index, completed_steps
@@ -2274,6 +2358,7 @@ class ImageConverterApp:
                     completed_steps += len(steps)
                     job.status = "skipped"
                     job.message = "目标文件已存在，未启用覆盖。"
+                    self._emit_processing_step(job, steps, len(steps) - 1, completed_steps, total_steps, force=True)
                     report.append(f"[SKIP] {job.source} -> {job.target} (target exists)")
                 else:
                     before_size = job.source.stat().st_size if job.source.exists() else 0
@@ -2806,6 +2891,7 @@ class ImageConverterApp:
         current_step = steps[current_index].name if steps and 0 <= current_index < len(steps) else "-"
         if steps and 0 <= current_index < len(steps):
             new_active = steps[current_index].module_id
+            self._sync_workflow_module_status(steps, current_index, status, error)
             if new_active != self.active_workflow_module_id:
                 self.active_workflow_module_id = new_active
                 self._schedule_workflow_render()
@@ -2817,27 +2903,54 @@ class ImageConverterApp:
         self.task_progress_text.set(f"总进度：{percent}%")
         self._render_current_steps(steps, current_index, completed_steps, status)
 
+    def _sync_workflow_module_status(self, steps: list[ProcessingStep], current_index: int, status: str, error: str = "") -> None:
+        enabled_ids = {module.id for module in self._workflow_modules() if module.enabled}
+        for module_id in enabled_ids:
+            self.workflow_module_status[module_id] = "waiting"
+        for step in steps[:current_index]:
+            if step.module_id in enabled_ids:
+                self.workflow_module_status[step.module_id] = "done"
+        if steps and 0 <= current_index < len(steps):
+            module_id = steps[current_index].module_id
+            if module_id in enabled_ids:
+                self.workflow_module_status[module_id] = "failed" if status == "failed" else "running"
+                if status == "failed":
+                    self.workflow_module_error[module_id] = error
+        self._schedule_workflow_render()
+
     def _render_current_steps(self, steps: list[ProcessingStep], current_index: int, completed_steps: int, status: str) -> None:
-        if not hasattr(self, "task_line_frame"):
+        if not hasattr(self, "task_step_labels"):
             return
-        # Keep the compact current line stable; detailed step state is exposed in the status text.
+        if not steps:
+            items = [("○", "等待开始转换", "#98a2b3")]
+            self._set_step_label_rows(items, top_hidden=False, bottom_hidden=False)
+            return
         visible_start = max(0, min(current_index - 2, max(0, len(steps) - 5)))
         visible = steps[visible_start: visible_start + 5]
-        parts: list[str] = []
+        items: list[tuple[str, str, str]] = []
         for absolute_index, step in enumerate(visible, start=visible_start):
             if status == "failed" and absolute_index == current_index:
-                marker = "!"
+                marker, color = "!", "#b42318"
             elif absolute_index < current_index:
-                marker = "✓"
+                marker, color = "✓", "#667085"
             elif absolute_index == current_index:
-                marker = "●"
+                marker, color = "●", "#0b5cad"
             else:
-                marker = "○"
-            parts.append(f"{marker}{step.name}")
-        prefix = "…" if visible_start > 0 else ""
-        suffix = "…" if visible_start + len(visible) < len(steps) else ""
-        compact = "  ".join(parts)
-        self.task_current_step_text.set(f"当前步骤：{prefix}{compact}{suffix}")
+                marker, color = "○", "#98a2b3"
+            items.append((marker, step.name, color))
+        self._set_step_label_rows(items, top_hidden=visible_start > 0, bottom_hidden=visible_start + len(visible) < len(steps))
+
+    def _set_step_label_rows(self, items: list[tuple[str, str, str]], top_hidden: bool, bottom_hidden: bool) -> None:
+        if self.task_fade_top:
+            self.task_fade_top.config(text="▲ 还有上一步" if top_hidden else "")
+        if self.task_fade_bottom:
+            self.task_fade_bottom.config(text="▼ 还有后续步骤" if bottom_hidden else "")
+        for idx, label in enumerate(self.task_step_labels):
+            if idx < len(items):
+                marker, text, color = items[idx]
+                label.config(text=f"{marker} {text}", fg=color)
+            else:
+                label.config(text="", fg="#98a2b3")
 
     def _refresh_job_card_by_key(self, source_key: str) -> None:
         for idx, job in enumerate(self.jobs):
@@ -2859,6 +2972,7 @@ class ImageConverterApp:
                     completed_steps, total_steps, index, total, ok, failed, skipped = payload  # type: ignore[misc]
                     self.progress.config(value=completed_steps, maximum=max(1, total_steps))
                     percent = int(completed_steps * 100 / max(1, total_steps))
+                    self.start_button.config(state="disabled", text=f"转换中 {percent}%")
                     self._set_status_parts([
                         ("处理中 ", False), (f"{index}/{total}", True),
                         ("，成功 ", False), (str(ok), True),
@@ -2868,14 +2982,20 @@ class ImageConverterApp:
                     self.task_progress_text.set(f"总进度：{percent}%")
                 elif kind == "done":
                     ok, failed, skipped, unselected, report_path, failures, elapsed = payload  # type: ignore[misc]
+                    selected = max(0, ok + failed + skipped)
                     self._set_status_parts([
-                        ("完成：成功 ", False), (str(ok), True),
+                        ("转换完成：成功 ", False), (str(ok), True),
                         ("，失败 ", False), (str(failed), True),
                         ("，跳过 ", False), (str(skipped), True),
                         ("，未选 ", False), (str(unselected), True),
-                        (f"。报告：{report_path}", False),
+                        (f"，耗时 {elapsed:.1f} 秒。报告：{report_path}", False),
                     ])
-                    self._set_task_status("-", "本次任务已完成", "100%")
+                    self._set_task_status("-", "✓ 本次任务已完成", "100%")
+                    if hasattr(self, "task_open_output_button"):
+                        self.task_open_output_button.pack(side="right")
+                    for module in self._workflow_modules():
+                        if module.enabled and module.id not in self.workflow_module_error:
+                            self.workflow_module_status[module.id] = "done"
                     self.active_workflow_module_id = None
                     self._schedule_workflow_render()
                     summary = f"成功 {ok}\n失败 {failed}\n跳过 {skipped}\n未选 {unselected}\n耗时 {elapsed:.1f} 秒\n\n报告：{report_path}"
@@ -2883,8 +3003,7 @@ class ImageConverterApp:
                         shown = "\n".join(str(item) for item in failures[:8])
                         more = "" if len(failures) <= 8 else f"\n... 还有 {len(failures) - 8} 条，详见报告。"
                         messagebox.showwarning("转换完成：存在失败项", f"{summary}\n\n失败列表：\n{shown}{more}")
-                    else:
-                        messagebox.showinfo("转换完成", summary)
+                    self.start_button.config(state="normal", text=f"再次转换（{selected}张）" if selected else "再次转换")
         except queue.Empty:
             pass
         self.root.after(120, self._drain_events)
