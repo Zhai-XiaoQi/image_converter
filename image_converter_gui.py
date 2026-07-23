@@ -740,8 +740,9 @@ class ImageConverterApp:
             font=("Microsoft YaHei UI", 10, "bold"),
         )
         self.start_button.pack(side="left", padx=(10, 0), ipady=2)
-        self.status_frame = Frame(main)
-        self.status_frame.pack(fill="x", pady=(8, 0))
+        self.status_frame = Frame(main, height=26)
+        self.status_frame.pack(fill="x", pady=(8, 6))
+        self.status_frame.pack_propagate(False)
         self._set_status_message("请选择图片或文件夹。")
         for drop_widget in (preview, self.tree, self.grid_canvas):
             self._enable_batch_drop(drop_widget)
@@ -781,7 +782,7 @@ class ImageConverterApp:
             return
         for child in self.status_frame.winfo_children():
             child.destroy()
-        Label(self.status_frame, text=message, anchor="w").pack(side="left")
+        Label(self.status_frame, text=message, anchor="w").pack(side="left", fill="y")
 
     def _set_status_parts(self, parts: list[tuple[str, bool]]) -> None:
         self.status_text.set("".join(text for text, _highlight in parts))
@@ -793,7 +794,7 @@ class ImageConverterApp:
             options = {"text": text, "anchor": "w"}
             if highlight:
                 options.update({"fg": "#0b5cad", "font": self.status_number_font})
-            Label(self.status_frame, **options).pack(side="left")
+            Label(self.status_frame, **options).pack(side="left", fill="y")
 
     def _update_start_button_state(self) -> None:
         if not hasattr(self, "start_button"):
