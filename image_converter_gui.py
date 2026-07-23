@@ -466,8 +466,17 @@ class ImageConverterApp:
 
     def save_current_preset(self) -> None:
         current_key = self._preset_key_from_display(self.preset_name.get())
+        if current_key == "自定义" or current_key not in self.presets:
+            self.save_preset_as()
+            return
+        name = current_key
+        self._write_preset(name)
+        self.preset_summary.set(f"已覆盖：{name}")
+
+    def save_preset_as(self) -> None:
+        current_key = self._preset_key_from_display(self.preset_name.get())
         initial = current_key if current_key != "自定义" else ""
-        name = simpledialog.askstring("保存预设", "请输入预设名称：", initialvalue=initial)
+        name = simpledialog.askstring("另存为预设", "请输入新预设名称：", initialvalue=initial)
         if not name:
             return
         name = name.strip()
@@ -478,12 +487,15 @@ class ImageConverterApp:
             ok = messagebox.askyesno("覆盖预设", f"预设「{name}」已存在，是否用当前参数覆盖？")
             if not ok:
                 return
+        self._write_preset(name)
+        self.preset_summary.set(f"已保存：{name}")
+
+    def _write_preset(self, name: str) -> None:
         self.presets[name] = self._capture_preset()
         PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
         PRESETS_FILE.write_text(json.dumps(self.presets, ensure_ascii=False, indent=2), encoding="utf-8")
         self.preset_name.set(name)
         self.preset_combo.config(values=self._preset_names())
-        self.preset_summary.set(f"已保存：{name}")
 
     def _build_ui(self) -> None:
         style = ttk.Style(self.root)
@@ -595,12 +607,12 @@ class ImageConverterApp:
         workflow_list = Frame(workflow_box, height=92)
         workflow_list.pack(fill="x", padx=8, pady=(6, 2))
         workflow_list.pack_propagate(False)
-        self.workflow_canvas = Canvas(workflow_list, highlightthickness=0, height=88, bg="#f5f5f5")
+        self.workflow_canvas = Canvas(workflow_list, highlightthickness=0, height=88, bg="#050505")
         workflow_scroll = Scrollbar(workflow_list, orient="vertical", command=self.workflow_canvas.yview)
         self.workflow_canvas.config(yscrollcommand=workflow_scroll.set)
         self.workflow_canvas.pack(side="left", fill="both", expand=True)
         workflow_scroll.pack(side="right", fill="y")
-        self.workflow_cards_frame = Frame(self.workflow_canvas, bg="#f5f5f5")
+        self.workflow_cards_frame = Frame(self.workflow_canvas, bg="#050505")
         self.workflow_window = self.workflow_canvas.create_window((0, 0), window=self.workflow_cards_frame, anchor="nw")
         self.workflow_cards_frame.bind("<Configure>", self._on_workflow_inner_configure)
         self.workflow_canvas.bind("<Configure>", self._on_workflow_canvas_configure)
@@ -621,7 +633,8 @@ class ImageConverterApp:
         self.preset_combo = ttk.Combobox(preset_row, textvariable=self.preset_name, values=self._preset_names(), width=26, state="readonly")
         self.preset_combo.pack(side="left", fill="x", expand=True)
         self.preset_combo.bind("<<ComboboxSelected>>", lambda _e: self.apply_preset(self.preset_name.get()))
-        Button(preset_row, text="保存预设", command=self.save_current_preset, width=10).pack(side="left", padx=(8, 0))
+        Button(preset_row, text="保存", command=self.save_current_preset, width=7).pack(side="left", padx=(8, 0))
+        Button(preset_row, text="另存为", command=self.save_preset_as, width=7).pack(side="left", padx=(6, 0))
         Label(preset_box, textvariable=self.preset_summary, fg="#0b5cad", anchor="w", wraplength=500).pack(fill="x", padx=10, pady=(0, 7))
 
         parameter_box = LabelFrame(opts, text="参数配置", font=section_font)
@@ -1488,31 +1501,32 @@ class ImageConverterApp:
             Label(
                 self.workflow_cards_frame,
                 text="未启用处理模块",
-                fg="#98a2b3",
-                bg="#f5f5f5",
+                fg="#6b7280",
+                bg="#050505",
                 anchor="w",
+                font=("Consolas", 9),
             ).pack(fill="x", padx=8, pady=4)
             return
         for index, module in enumerate(modules, start=1):
             status = self._workflow_status_for_module(module)
             _marker, marker_fg, row_bg, title_fg = self._workflow_status_style(status)
-            row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg=row_bg, padx=6, pady=2)
-            row.pack(fill="x", pady=(0, 1))
+            row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg="#050505", padx=6, pady=0)
+            row.pack(fill="x")
             title = Button(
                 row,
-                text=f"{self._circled_number(index)} {module.name}  {module.summary}",
+                text=f"{index:02d}> {module.name:<8} | {module.summary}",
                 command=lambda key=module.panel_key: self._expand_parameter_panel(key),
                 anchor="w",
                 relief="flat",
-                bg=row_bg,
+                bg="#050505",
                 fg=title_fg,
-                activebackground=row_bg,
+                activebackground="#111827",
                 activeforeground=title_fg,
-                font=("Microsoft YaHei UI", 9),
+                font=("Consolas", 9),
             )
             title.pack(side="left", fill="x", expand=True)
             status_text = self._workflow_status_text(module.id, status)
-            Label(row, text=status_text, anchor="e", fg=marker_fg, bg=row_bg, font=("Microsoft YaHei UI", 9, "bold"), width=8).pack(side="right")
+            Label(row, text=status_text, anchor="e", fg=marker_fg, bg="#050505", font=("Consolas", 9, "bold"), width=8).pack(side="right")
             self.workflow_cards[module.id] = row
 
     def _workflow_status_text(self, module_id: str, status: str) -> str:
@@ -1541,14 +1555,14 @@ class ImageConverterApp:
     @staticmethod
     def _workflow_status_style(status: str) -> tuple[str, str, str, str]:
         if status == "running":
-            return "●", "#0b5cad", "#eaf3ff", "#0b5cad"
+            return "●", "#39a0ff", "#050505", "#d1e9ff"
         if status == "done":
-            return "✓", "#667085", "#ffffff", "#344054"
+            return "✓", "#22c55e", "#050505", "#9ca3af"
         if status == "failed":
-            return "!", "#b42318", "#fff4f2", "#b42318"
+            return "!", "#ff4d4f", "#050505", "#fecaca"
         if status == "disabled":
-            return "○", "#c7ccd1", "#ffffff", "#667085"
-        return "○", "#98a2b3", "#ffffff", "#344054"
+            return "○", "#4b5563", "#050505", "#6b7280"
+        return "○", "#6b7280", "#050505", "#9ca3af"
 
     def choose_output(self) -> None:
         folder = filedialog.askdirectory(title="选择输出文件夹")
@@ -2273,7 +2287,10 @@ class ImageConverterApp:
         now = time.monotonic()
         if not force and now - self.last_task_ui_update < 0.06:
             return
-        self.last_task_ui_update = now
+        if force:
+            self.last_task_ui_update = 0.0
+        else:
+            self.last_task_ui_update = now
         self.events.put((
             "step",
             {
