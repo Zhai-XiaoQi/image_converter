@@ -26,6 +26,7 @@ from tkinter import (
     Scale,
     Scrollbar,
     StringVar,
+    TclError,
     Toplevel,
     Tk,
     filedialog,
@@ -220,6 +221,8 @@ class ImageConverterApp:
         }
         self.workflow_module_progress: dict[str, int] = {}
         self.workflow_module_error: dict[str, str] = {}
+        self.workflow_cursor_on = True
+        self.workflow_cursor_label: Label | None = None
         self.task_ui_after_id: str | None = None
         self.last_task_ui_update = 0.0
         self.current_processing_steps: list[ProcessingStep] = []
@@ -604,10 +607,10 @@ class ImageConverterApp:
 
         workflow_box = LabelFrame(opts, text="当前处理流程", font=section_font)
         workflow_box.pack(fill="x", pady=(0, 6))
-        workflow_list = Frame(workflow_box, height=92)
-        workflow_list.pack(fill="x", padx=8, pady=(6, 2))
+        workflow_list = Frame(workflow_box, height=82)
+        workflow_list.pack(fill="x", padx=8, pady=(5, 1))
         workflow_list.pack_propagate(False)
-        self.workflow_canvas = Canvas(workflow_list, highlightthickness=0, height=88, bg="#050505")
+        self.workflow_canvas = Canvas(workflow_list, highlightthickness=0, height=78, bg="#050505")
         workflow_scroll = Scrollbar(workflow_list, orient="vertical", command=self.workflow_canvas.yview)
         self.workflow_canvas.config(yscrollcommand=workflow_scroll.set)
         self.workflow_canvas.pack(side="left", fill="both", expand=True)
@@ -619,14 +622,14 @@ class ImageConverterApp:
         self.workflow_canvas.bind("<MouseWheel>", self._on_workflow_mousewheel)
         self.workflow_cards_frame.bind("<MouseWheel>", self._on_workflow_mousewheel)
         self.workflow_progress = ttk.Progressbar(workflow_box, mode="determinate")
-        self.workflow_progress.pack(fill="x", padx=8, pady=(2, 0))
+        self.workflow_progress.pack(fill="x", padx=8, pady=(1, 0))
         Label(
             workflow_box,
             textvariable=self.workflow_stats_text,
             anchor="w",
             fg="#0b5cad",
             font=("Microsoft YaHei UI", 9, "bold"),
-        ).pack(fill="x", padx=10, pady=(3, 7))
+        ).pack(fill="x", padx=10, pady=(2, 5))
 
         preset_box = LabelFrame(opts, text="处理预设", font=section_font)
         preset_box.pack(fill="x", pady=(0, 6))
@@ -867,13 +870,17 @@ class ImageConverterApp:
         ):
             var.trace_add("write", lambda *_args: self._update_workflow_summary())
 
-        self.status_frame = Frame(main, height=44)
-        self.status_frame.pack(fill="x", pady=(6, 0))
+        self.status_frame = Frame(main, height=38)
+        self.status_frame.pack(fill="x", pady=(3, 2))
         self.status_frame.pack_propagate(False)
-        self.status_line_frame = Frame(self.status_frame)
+        status_content = Frame(self.status_frame)
+        status_content.pack(fill="both", expand=True)
+        status_left = Frame(status_content)
+        status_left.pack(side="left", fill="both", expand=True)
+        self.status_line_frame = Frame(status_left)
         self.status_line_frame.pack(fill="x")
-        self.task_line_frame = Frame(self.status_frame)
-        self.task_line_frame.pack(fill="x", pady=(2, 0))
+        self.task_line_frame = Frame(status_left)
+        self.task_line_frame.pack(fill="x", pady=(1, 0))
         Label(self.task_line_frame, textvariable=self.task_current_file_text, anchor="w", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left")
         Label(self.task_line_frame, text="  |  ").pack(side="left")
         Label(self.task_line_frame, textvariable=self.task_current_step_text, anchor="w", fg="#0b5cad", font=self.status_number_font).pack(side="left")
@@ -881,12 +888,9 @@ class ImageConverterApp:
         Label(self.task_line_frame, textvariable=self.task_progress_text, anchor="w").pack(side="left")
         self._set_status_message("请选择图片或文件夹。")
 
-        bottom = Frame(main, height=32)
-        bottom.pack(fill="x", pady=(2, 4))
-        bottom.pack_propagate(False)
         self.progress = self.workflow_progress
         self.start_button = Button(
-            bottom,
+            status_content,
             text="开始转换",
             command=self.start_convert,
             width=18,
@@ -896,12 +900,13 @@ class ImageConverterApp:
             activeforeground="white",
             font=("Microsoft YaHei UI", 10, "bold"),
         )
-        self.start_button.pack(side="right", fill="y", padx=(10, 0), pady=(2, 2))
+        self.start_button.pack(side="right", fill="y", padx=(10, 0), pady=(1, 1))
         for drop_widget in (preview, self.tree, self.grid_canvas):
             self._enable_batch_drop(drop_widget)
         self._build_single_editor_tab(module_font)
         self._on_output_format_change()
         self.root.after(220, self._set_initial_panes)
+        self.root.after(500, self._blink_workflow_cursor)
         self._bind_shortcuts()
 
     def _make_collapsible_panel(self, parent: Frame, text: str, variable: BooleanVar, command, panel_key: str) -> tuple[Frame, Frame]:
@@ -1492,60 +1497,72 @@ class ImageConverterApp:
         for child in self.workflow_cards_frame.winfo_children():
             child.destroy()
         self.workflow_cards.clear()
+        self.workflow_cursor_label = None
         modules = [module for module in self._workflow_modules() if module.enabled]
         if not modules:
-            Label(
-                self.workflow_cards_frame,
-                text="未启用处理模块",
-                fg="#6b7280",
-                bg="#050505",
-                anchor="w",
-                font=("Consolas", 9),
-            ).pack(fill="x", padx=8, pady=4)
+            row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg="#050505", padx=6, pady=0)
+            row.pack(fill="x")
+            self._terminal_label(row, "00>", "#38bdf8", bold=True)
+            self._terminal_label(row, " idle", "#94a3b8", bold=True)
+            self._terminal_label(row, " | ", "#64748b")
+            self._terminal_label(row, "waiting for enabled module", "#64748b")
+            self._pack_workflow_cursor()
             return
         for index, module in enumerate(modules, start=1):
             status = self._workflow_status_for_module(module)
             _marker, marker_fg, _row_bg, title_fg = self._workflow_status_style(status)
             row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg="#050505", padx=6, pady=0)
             row.pack(fill="x")
-            module_button = Button(
-                row,
-                text=f"{index:02d}> {module.name}",
-                command=lambda key=module.panel_key: self._expand_parameter_panel(key),
-                anchor="w",
-                relief="flat",
-                bg="#050505",
-                fg=title_fg,
-                activebackground="#111827",
-                activeforeground=title_fg,
-                font=("Consolas", 8),
-                width=14,
-            )
-            module_button.pack(side="left")
-            Label(row, text=" | ", fg="#64748b", bg="#050505", font=("Consolas", 8)).pack(side="left")
+            self._terminal_label(row, f"{index:02d}>", "#38bdf8" if status != "done" else "#94a3b8", bold=True)
+            name_label = self._terminal_label(row, f" {module.name}", title_fg, bold=True)
+            row.bind("<Button-1>", lambda _e, key=module.panel_key: self._expand_parameter_panel(key))
+            name_label.bind("<Button-1>", lambda _e, key=module.panel_key: self._expand_parameter_panel(key))
+            self._terminal_label(row, " | ", "#64748b")
             summary_frame = Frame(row, bg="#050505")
-            summary_frame.pack(side="left", fill="x", expand=True)
+            summary_frame.pack(side="left")
             self._pack_terminal_summary(summary_frame, module.summary)
             status_text = self._workflow_status_text(module.id, status)
             if status_text:
-                Label(row, text=f" {status_text}", anchor="w", fg=marker_fg, bg="#050505", font=("Consolas", 8, "bold")).pack(side="left")
+                self._terminal_label(row, f" {status_text}", marker_fg, bold=True)
             self.workflow_cards[module.id] = row
+        self._pack_workflow_cursor()
+
+    def _terminal_label(self, parent: Frame, text: str, fg: str, bold: bool = False) -> Label:
+        label = Label(
+            parent,
+            text=text,
+            fg=fg,
+            bg="#050505",
+            font=("Consolas", 7, "bold" if bold else "normal"),
+            anchor="w",
+        )
+        label.pack(side="left")
+        return label
+
+    def _pack_workflow_cursor(self) -> None:
+        row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg="#050505", padx=6, pady=0)
+        row.pack(fill="x")
+        self._terminal_label(row, "C:\\workflow> ", "#22c55e", bold=True)
+        self.workflow_cursor_label = self._terminal_label(row, "█", "#22c55e", bold=True)
+
+    def _blink_workflow_cursor(self) -> None:
+        self.workflow_cursor_on = not self.workflow_cursor_on
+        label = getattr(self, "workflow_cursor_label", None)
+        try:
+            if label is not None and label.winfo_exists():
+                label.config(fg="#22c55e" if self.workflow_cursor_on else "#050505")
+        except TclError:
+            pass
+        self.root.after(520, self._blink_workflow_cursor)
 
     def _pack_terminal_summary(self, parent: Frame, text: str) -> None:
-        pattern = re.compile(r"(JPG|PNG|WEBP|BMP|TIFF|HEIC|HEIF|\\d+x\\d+|\\d+%|#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})|\\d+KB)")
+        pattern = re.compile(r"(JPG质量\d+%|质量\d+%|目标\d+KB|JPG|PNG|WEBP|BMP|TIFF|HEIC|HEIF|\d+x\d+|\d+%|#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})|\d+KB)")
         parts = pattern.split(text)
         for part in parts:
             if not part:
                 continue
             is_value = bool(pattern.fullmatch(part))
-            Label(
-                parent,
-                text=part,
-                fg="#facc15" if is_value else "#cbd5e1",
-                bg="#050505",
-                font=("Consolas", 8, "bold" if is_value else "normal"),
-                anchor="w",
-            ).pack(side="left")
+            self._terminal_label(parent, part, "#facc15" if is_value else "#cbd5e1", bold=is_value)
 
     def _workflow_status_text(self, module_id: str, status: str) -> str:
         if status == "running":
