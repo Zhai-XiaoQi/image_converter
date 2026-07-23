@@ -48,7 +48,8 @@ except Exception:
 
 SUPPORTED_INPUTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"}
 SKIP_DIR_NAMES = {"渐进式JPG", "AI_language_check_contact_sheets", "AI_language_text_check_sheets", "AI_language_category_sheets"}
-PRESETS_FILE = Path(__file__).with_name("image_converter_presets.json")
+LEGACY_PRESETS_FILE = Path(__file__).with_name("image_converter_presets.json")
+PRESETS_FILE = Path(os.getenv("APPDATA") or Path.home()) / "图片格式转换工具" / "image_converter_presets.json"
 INVALID_FILENAME_CHARS = r'<>:"/\|?*'
 APP_VERSION = "v1.4.6"
 DEFAULT_PRESETS = {
@@ -326,16 +327,17 @@ class ImageConverterApp:
 
     def _load_presets(self) -> None:
         self.presets = {name: values.copy() for name, values in DEFAULT_PRESETS.items()}
-        if not PRESETS_FILE.exists():
-            return
-        try:
-            loaded = json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            return
-        if isinstance(loaded, dict):
-            for name, values in loaded.items():
-                if isinstance(name, str) and isinstance(values, dict):
-                    self.presets[name] = values
+        for path in (LEGACY_PRESETS_FILE, PRESETS_FILE):
+            if not path.exists():
+                continue
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(loaded, dict):
+                for name, values in loaded.items():
+                    if isinstance(name, str) and isinstance(values, dict):
+                        self.presets[name] = values
 
     def _preset_names(self) -> list[str]:
         def display_name(name: str) -> str:
@@ -493,14 +495,21 @@ class ImageConverterApp:
         return name
 
     def save_current_preset(self) -> None:
-        name = simpledialog.askstring("保存预设", "请输入预设名称：", initialvalue=self.preset_name.get() if self.preset_name.get() != "自定义" else "")
+        current_key = self._preset_key_from_display(self.preset_name.get())
+        initial = current_key if current_key != "自定义" else ""
+        name = simpledialog.askstring("保存预设", "请输入预设名称：", initialvalue=initial)
         if not name:
             return
         name = name.strip()
         if not name or name == "自定义":
             messagebox.showwarning("名称无效", "请使用有效的预设名称。")
             return
+        if name in self.presets:
+            ok = messagebox.askyesno("覆盖预设", f"预设「{name}」已存在，是否用当前参数覆盖？")
+            if not ok:
+                return
         self.presets[name] = self._capture_preset()
+        PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
         PRESETS_FILE.write_text(json.dumps(self.presets, ensure_ascii=False, indent=2), encoding="utf-8")
         self.preset_name.set(self._preset_display_name(name))
         self.preset_combo.config(values=self._preset_names())
@@ -527,9 +536,9 @@ class ImageConverterApp:
         left_col.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
         settings_shell = LabelFrame(body, text="自动化工作流", font=module_font, width=560)
-        settings_shell.pack(side="right", fill="x", anchor="n")
+        settings_shell.pack(side="right", fill="both", anchor="n")
         opts = Frame(settings_shell)
-        opts.pack(fill="x", padx=8, pady=8)
+        opts.pack(fill="both", expand=True, padx=8, pady=8)
 
         top_area = Frame(left_col)
         top_area.pack(fill="x", pady=(0, 8))
@@ -633,7 +642,22 @@ class ImageConverterApp:
         Button(preset_row, text="保存预设", command=self.save_current_preset, width=10).pack(side="left", padx=(8, 0))
         Label(preset_box, textvariable=self.preset_summary, fg="#0b5cad", anchor="w", wraplength=500).pack(fill="x", padx=10, pady=(0, 7))
 
-        _base_panel, base_box = self._make_collapsible_panel(opts, "格式与输出", self.format_conversion_enabled, self._on_output_format_change, "format")
+        parameter_box = LabelFrame(opts, text="参数配置", font=section_font)
+        parameter_box.pack(fill="both", expand=True, pady=(0, 6))
+        parameter_canvas = Canvas(parameter_box, highlightthickness=0)
+        self.parameter_canvas = parameter_canvas
+        parameter_scroll = Scrollbar(parameter_box, orient="vertical", command=parameter_canvas.yview)
+        parameter_canvas.config(yscrollcommand=parameter_scroll.set)
+        parameter_canvas.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
+        parameter_scroll.pack(side="right", fill="y", pady=6)
+        self.parameter_inner = Frame(parameter_canvas)
+        self.parameter_window = parameter_canvas.create_window((0, 0), window=self.parameter_inner, anchor="nw")
+        self.parameter_inner.bind("<Configure>", self._on_parameter_inner_configure)
+        parameter_canvas.bind("<Configure>", self._on_parameter_canvas_configure)
+        parameter_canvas.bind("<MouseWheel>", self._on_parameter_mousewheel)
+        self.parameter_inner.bind("<MouseWheel>", self._on_parameter_mousewheel)
+
+        _base_panel, base_box = self._make_collapsible_panel(self.parameter_inner, "格式与输出", self.format_conversion_enabled, self._on_output_format_change, "format")
         self.format_controls: list[object] = []
         base_row1 = Frame(base_box)
         base_row1.pack(fill="x", padx=10, pady=(7, 4))
@@ -654,7 +678,7 @@ class ImageConverterApp:
         self.preserve_structure_check.pack(side="left", padx=(18, 0))
         self.format_controls.extend([self.progressive_check, self.alpha_label, self.alpha_entry, self.preserve_structure_check])
 
-        _size_panel, size_compress_box = self._make_collapsible_panel(opts, "尺寸与压缩", self.size_compress_enabled, self._on_size_compress_toggle, "size")
+        _size_panel, size_compress_box = self._make_collapsible_panel(self.parameter_inner, "尺寸与压缩", self.size_compress_enabled, self._on_size_compress_toggle, "size")
         self.resize_controls: list[object] = []
         self.compression_controls: list[object] = []
         resize_box = Frame(size_compress_box)
@@ -717,7 +741,7 @@ class ImageConverterApp:
             self.target_size_entry, self.target_size_unit, self.compression_hint,
         ])
 
-        _rename_panel, rename_box = self._make_collapsible_panel(opts, "批量重命名", self.rename_enabled, lambda: (self._update_control_states(), self.scan_jobs()), "rename")
+        _rename_panel, rename_box = self._make_collapsible_panel(self.parameter_inner, "批量重命名", self.rename_enabled, lambda: (self._update_control_states(), self.scan_jobs()), "rename")
         self.rename_controls: list[object] = []
         rename_row = Frame(rename_box)
         rename_row.pack(fill="x", padx=8, pady=(5, 2))
@@ -755,7 +779,7 @@ class ImageConverterApp:
             self.rename_rules_button, self.rename_rules_label,
         ])
 
-        _watermark_panel, watermark_box = self._make_collapsible_panel(opts, "批量水印", self.watermark_enabled, self._update_control_states, "watermark")
+        _watermark_panel, watermark_box = self._make_collapsible_panel(self.parameter_inner, "批量水印", self.watermark_enabled, self._update_control_states, "watermark")
         watermark_row1 = Frame(watermark_box)
         watermark_row1.pack(fill="x", padx=8, pady=(5, 2))
         self.watermark_common_controls: list[object] = []
@@ -827,7 +851,7 @@ class ImageConverterApp:
         ])
         self.watermark_logo_controls.append(self.watermark_logo_button)
 
-        danger_box = LabelFrame(opts, text="危险操作", font=section_font)
+        danger_box = LabelFrame(self.parameter_inner, text="危险操作", font=section_font)
         danger_box.pack(fill="x", pady=(6, 0))
         danger_row = Frame(danger_box)
         danger_row.pack(fill="x", padx=8, pady=5)
@@ -920,8 +944,30 @@ class ImageConverterApp:
             body.pack(fill="x", padx=0, pady=(0, 6))
         return panel, body
 
+    def _on_parameter_inner_configure(self, _event=None) -> None:
+        if not hasattr(self, "parameter_canvas"):
+            return
+        self.parameter_canvas.configure(scrollregion=self.parameter_canvas.bbox("all"))
+
+    def _on_parameter_canvas_configure(self, event) -> None:
+        if not hasattr(self, "parameter_window"):
+            return
+        self.parameter_canvas.itemconfigure(self.parameter_window, width=event.width)
+        self.parameter_canvas.configure(scrollregion=self.parameter_canvas.bbox("all"))
+
+    def _on_parameter_mousewheel(self, event) -> str:
+        if hasattr(self, "parameter_canvas"):
+            step = -1 if event.delta > 0 else 1
+            self.parameter_canvas.yview_scroll(step * 3, "units")
+        return "break"
+
     def _toggle_parameter_panel(self, key: str) -> None:
-        self._set_parameter_panel_expanded(key, not self.parameter_panel_expanded.get(key, False))
+        expanding = not self.parameter_panel_expanded.get(key, False)
+        if expanding:
+            for panel_key in self.parameter_panel_expanded:
+                self._set_parameter_panel_expanded(panel_key, panel_key == key)
+        else:
+            self._set_parameter_panel_expanded(key, False)
 
     def _set_parameter_panel_expanded(self, key: str, expanded: bool) -> None:
         self.parameter_panel_expanded[key] = expanded
@@ -938,6 +984,8 @@ class ImageConverterApp:
             body.pack_forget()
         try:
             self.parameter_panels[key].update_idletasks()
+            if hasattr(self, "parameter_canvas"):
+                self.parameter_canvas.configure(scrollregion=self.parameter_canvas.bbox("all"))
         except Exception:
             pass
 
@@ -947,6 +995,19 @@ class ImageConverterApp:
         panel = self.parameter_panels.get(key)
         if panel:
             panel.focus_set()
+        if hasattr(self, "parameter_canvas"):
+            self.root.after(30, lambda key=key: self._scroll_parameter_panel_into_view(key))
+
+    def _scroll_parameter_panel_into_view(self, key: str) -> None:
+        if not hasattr(self, "parameter_canvas"):
+            return
+        panel = self.parameter_panels.get(key)
+        bbox = self.parameter_canvas.bbox("all")
+        if not panel or not bbox:
+            return
+        content_height = max(1, bbox[3] - bbox[1])
+        y = max(0, panel.winfo_y() - 8)
+        self.parameter_canvas.yview_moveto(min(1.0, y / content_height))
 
     def _bind_shortcuts(self) -> None:
         self.root.bind("<Return>", self._shortcut_enter)
@@ -1439,10 +1500,10 @@ class ImageConverterApp:
         modules = self._workflow_modules()
         for index, module in enumerate(modules, start=1):
             status = self._workflow_status_for_module(module)
-            marker, marker_fg, card_bg, title_fg = self._workflow_status_style(status)
+            marker, marker_fg, row_bg, title_fg = self._workflow_status_style(status)
             node = Frame(self.workflow_cards_frame, bg="#f5f5f5")
-            node.pack(fill="x", pady=(0, 2))
-            rail = Frame(node, width=38, bg="#f5f5f5")
+            node.pack(fill="x", pady=(0, 1))
+            rail = Frame(node, width=28, bg="#f5f5f5")
             rail.pack(side="left", fill="y")
             rail.pack_propagate(False)
             Label(
@@ -1450,37 +1511,28 @@ class ImageConverterApp:
                 text=marker,
                 fg=marker_fg,
                 bg="#f5f5f5",
-                font=("Microsoft YaHei UI", 12, "bold"),
-            ).pack(anchor="n", pady=(6, 0))
+                font=("Microsoft YaHei UI", 9, "bold"),
+            ).pack(anchor="n", pady=(2, 0))
             if index < len(modules):
-                Label(rail, text="│\n▼", fg="#c7ccd1", bg="#f5f5f5", justify="center").pack(anchor="n")
-            card = Frame(
-                node,
-                bd=0,
-                relief="flat",
-                bg=card_bg,
-                padx=10,
-                pady=6,
-                highlightthickness=1,
-                highlightbackground="#d7dce2" if status == "running" else "#e5e7eb",
-                highlightcolor="#0b5cad" if status == "running" else "#e5e7eb",
-            )
-            card.pack(side="left", fill="x", expand=True)
-            Button(
-                card,
+                Label(rail, text="│", fg="#d0d5dd", bg="#f5f5f5", justify="center").pack(anchor="n")
+            row = Frame(node, bd=0, relief="flat", bg=row_bg, padx=6, pady=3)
+            row.pack(side="left", fill="x", expand=True)
+            title = Button(
+                row,
                 text=f"{self._circled_number(index)} {module.name}",
                 command=lambda key=module.panel_key: self._expand_parameter_panel(key),
                 anchor="w",
                 relief="flat",
-                bg=card_bg,
+                bg=row_bg,
                 fg=title_fg,
-                activebackground=card_bg,
+                activebackground=row_bg,
                 activeforeground=title_fg,
                 font=("Microsoft YaHei UI", 9, "bold"),
-            ).pack(fill="x")
+            )
+            title.pack(side="top", fill="x")
             summary = "正在处理..." if status == "running" else module.summary
-            Label(card, text=summary, anchor="w", fg="#667085", bg=card_bg, wraplength=500).pack(fill="x", pady=(2, 0))
-            self.workflow_cards[module.id] = card
+            Label(row, text=summary, anchor="w", fg="#667085", bg=row_bg, wraplength=500, font=("Microsoft YaHei UI", 8)).pack(fill="x")
+            self.workflow_cards[module.id] = row
 
     @staticmethod
     def _circled_number(index: int) -> str:
