@@ -209,6 +209,7 @@ class ImageConverterApp:
         }
         self.parameter_toggle_buttons: dict[str, Button] = {}
         self.workflow_ui_after_id: str | None = None
+        self.active_workflow_module_id: str | None = None
         self.task_ui_after_id: str | None = None
         self.last_task_ui_update = 0.0
         self.current_processing_steps: list[ProcessingStep] = []
@@ -515,10 +516,9 @@ class ImageConverterApp:
         left_col.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
         settings_shell = LabelFrame(body, text="自动化工作流", font=module_font, width=560)
-        settings_shell.pack(side="right", fill="y")
-        settings_shell.pack_propagate(False)
+        settings_shell.pack(side="right", fill="x", anchor="n")
         opts = Frame(settings_shell)
-        opts.pack(fill="both", expand=True, padx=8, pady=8)
+        opts.pack(fill="x", padx=8, pady=8)
 
         top_area = Frame(left_col)
         top_area.pack(fill="x", pady=(0, 8))
@@ -893,7 +893,7 @@ class ImageConverterApp:
         self.parameter_toggle_buttons[panel_key].pack(side="left")
         Label(label, text=text, font=("Microsoft YaHei UI", 10, "bold")).pack(side="left", padx=(4, 0))
         Checkbutton(label, text="启用", variable=variable, command=command).pack(side="left", padx=(8, 0))
-        Label(label, textvariable=self.parameter_summary_vars[panel_key], fg="#0b5cad", font=("Microsoft YaHei UI", 9)).pack(side="left", padx=(10, 0))
+        Label(label, textvariable=self.parameter_summary_vars[panel_key], fg="#667085", font=("Microsoft YaHei UI", 9), width=26, anchor="w").pack(side="left", padx=(10, 0))
         return label
 
     def _register_parameter_panel(self, key: str, panel: LabelFrame) -> None:
@@ -917,12 +917,27 @@ class ImageConverterApp:
         button = self.parameter_toggle_buttons.get(key)
         if button:
             button.config(text="▼" if expanded else "▶")
+        panel = self.parameter_panels.get(key)
+        if panel and expanded:
+            try:
+                panel.pack_propagate(True)
+                panel.configure(height=0)
+            except Exception:
+                pass
         for child, pack_info in self.parameter_panel_children.get(key, []):
             try:
                 if expanded:
                     child.pack(**pack_info)
                 else:
                     child.pack_forget()
+            except Exception:
+                pass
+        if panel:
+            try:
+                if not expanded:
+                    panel.configure(height=34)
+                    panel.pack_propagate(False)
+                panel.update_idletasks()
             except Exception:
                 pass
 
@@ -1347,8 +1362,8 @@ class ImageConverterApp:
             self.parameter_summary_vars[key].set(summary)
         total = len(self.jobs)
         selected = sum(1 for job in self.jobs if job.selected)
-        enabled_steps = len([module for module in self._workflow_modules() if module.enabled])
-        self.workflow_stats_text.set(f"已选择 {selected} / {total} 张 · 启用 {enabled_steps} 个处理步骤")
+        enabled_modules = len([module for module in self._workflow_modules() if module.enabled])
+        self.workflow_stats_text.set(f"已选择 {selected} / {total} 张 · 启用 {enabled_modules} 个处理模块")
         self._schedule_workflow_render()
 
     def _format_module_summary(self) -> str:
@@ -1358,7 +1373,10 @@ class ImageConverterApp:
         if self.output_format.get() == "jpg" and self.progressive_jpg.get():
             bits.append("渐进式")
         if self.output_format.get() == "jpg":
-            bits.append(f"背景 {self.alpha_bg.get()}")
+            bg = self.alpha_bg.get().strip().lower()
+            bits.append("白底" if bg in {"#fff", "#ffffff", "white"} else f"背景 {self.alpha_bg.get()}")
+        if self.preserve_structure.get():
+            bits.append("保留目录")
         return " · ".join(bits)
 
     def _size_module_summary(self) -> str:
@@ -1376,7 +1394,7 @@ class ImageConverterApp:
             if self.compression_mode.get() == "target":
                 compress_part = f"目标 {self.target_size.get() or '-'}KB"
             else:
-                compress_part = f"质量 {self._safe_int_var(self.quality, 92)}%"
+                compress_part = f"{self.output_format.get().upper()}质量{self._safe_int_var(self.quality, 92)}%"
         else:
             compress_part = "不压缩"
         return f"{size_part} · {compress_part}"
@@ -1416,22 +1434,41 @@ class ImageConverterApp:
         self.workflow_cards.clear()
         enabled_modules = [module for module in self._workflow_modules() if module.enabled]
         if not enabled_modules:
-            Label(self.workflow_cards_frame, text="未启用处理步骤，当前仅扫描和预览图片。", fg="#666", anchor="w").pack(fill="x", pady=3)
+            Label(self.workflow_cards_frame, text="未启用处理模块，当前仅扫描和预览图片。", fg="#666", anchor="w").pack(fill="x", pady=3)
             return
         for index, module in enumerate(enabled_modules, start=1):
-            card = Frame(self.workflow_cards_frame, bd=1, relief="solid", bg="#f7fbff", padx=8, pady=5)
-            card.pack(fill="x", pady=(0, 5))
+            active = module.id == self.active_workflow_module_id
+            node = Frame(self.workflow_cards_frame, bg="#f5f5f5")
+            node.pack(fill="x", pady=(0, 4))
+            rail = Frame(node, width=28, bg="#f5f5f5")
+            rail.pack(side="left", fill="y")
+            rail.pack_propagate(False)
+            Label(
+                rail,
+                text=str(index),
+                fg="#0b5cad" if active else "#98a2b3",
+                bg="#f5f5f5",
+                font=("Microsoft YaHei UI", 9, "bold" if active else "normal"),
+            ).pack(anchor="n", pady=(5, 0))
+            if index < len(enabled_modules):
+                Label(rail, text="│", fg="#d0d5dd", bg="#f5f5f5").pack(anchor="n")
+            card_bg = "#eaf3ff" if active else "#ffffff"
+            card_fg = "#0b5cad" if active else "#344054"
+            card = Frame(node, bd=1, relief="solid", bg=card_bg, padx=8, pady=5)
+            card.pack(side="left", fill="x", expand=True)
             Button(
                 card,
-                text=f"{index}. {module.name}",
+                text=module.name,
                 command=lambda key=module.panel_key: self._expand_parameter_panel(key),
                 anchor="w",
                 relief="flat",
-                bg="#f7fbff",
-                fg="#0b5cad",
-                font=("Microsoft YaHei UI", 9, "bold"),
+                bg=card_bg,
+                fg=card_fg,
+                activebackground=card_bg,
+                activeforeground=card_fg,
+                font=("Microsoft YaHei UI", 9, "bold" if active else "normal"),
             ).pack(fill="x")
-            Label(card, text=module.summary, anchor="w", fg="#333", bg="#f7fbff", wraplength=500).pack(fill="x", pady=(2, 0))
+            Label(card, text=module.summary, anchor="w", fg="#475467", bg=card_bg, wraplength=500).pack(fill="x", pady=(2, 0))
             self.workflow_cards[module.id] = card
 
     def choose_output(self) -> None:
@@ -2094,7 +2131,7 @@ class ImageConverterApp:
             (str(selected), True),
             (" 张，启用 ", False),
             (str(enabled_steps), True),
-            (" 个处理步骤。", False),
+            (" 个处理模块。", False),
         ])
 
     def _on_grid_configure(self, _event) -> None:
@@ -2110,11 +2147,14 @@ class ImageConverterApp:
         return "break"
 
     def _processing_steps_for_job(self, job: ConvertJob) -> list[ProcessingStep]:
-        steps = [
+        steps = []
+        if self.rename_enabled.get():
+            steps.append(ProcessingStep("rename", "应用命名规则", "rename"))
+        steps.extend([
             ProcessingStep("prepare_output", "准备输出路径", "format"),
             ProcessingStep("read_image", "读取图片", "format"),
             ProcessingStep("fix_orientation", "修正图片方向", "format"),
-        ]
+        ])
         if self.size_compress_enabled.get() and self.resize_enabled.get() and self.resize_mode.get() != "none":
             steps.append(ProcessingStep("resize", "调整尺寸", "size"))
         if self.watermark_enabled.get():
@@ -2261,6 +2301,8 @@ class ImageConverterApp:
                     report.append(f"[SKIP] {job.source} -> {job.target} (target exists)")
                 else:
                     before_size = job.source.stat().st_size if job.source.exists() else 0
+                    if self.rename_enabled.get():
+                        finish_step("rename")
                     self._convert_one(job.source, job.target, step_callback=finish_step)
                     after_size = job.target.stat().st_size if job.target.exists() else 0
                     if self.delete_originals.get() and job.source.resolve() != job.target.resolve():
@@ -2786,6 +2828,11 @@ class ImageConverterApp:
             return
         current_file = str(payload.get("file", "-"))
         current_step = steps[current_index].name if steps and 0 <= current_index < len(steps) else "-"
+        if steps and 0 <= current_index < len(steps):
+            new_active = steps[current_index].module_id
+            if new_active != self.active_workflow_module_id:
+                self.active_workflow_module_id = new_active
+                self._schedule_workflow_render()
         if status == "failed":
             current_step = f"失败：{error or current_step}"
         percent = int(completed_steps * 100 / max(1, total_steps))
@@ -2853,6 +2900,8 @@ class ImageConverterApp:
                         (f"。报告：{report_path}", False),
                     ])
                     self._set_task_status("-", "本次任务已完成", "100%")
+                    self.active_workflow_module_id = None
+                    self._schedule_workflow_render()
                     summary = f"成功 {ok}\n失败 {failed}\n跳过 {skipped}\n未选 {unselected}\n耗时 {elapsed:.1f} 秒\n\n报告：{report_path}"
                     if failures:
                         shown = "\n".join(str(item) for item in failures[:8])
