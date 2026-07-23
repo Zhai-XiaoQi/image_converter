@@ -729,10 +729,11 @@ class ImageConverterApp:
         self.status_frame.pack_propagate(False)
         self._set_status_message("请选择图片或文件夹。")
 
-        bottom = Frame(main)
-        bottom.pack(fill="x", pady=(4, 6))
+        bottom = Frame(main, height=44)
+        bottom.pack(fill="x", pady=(4, 8))
+        bottom.pack_propagate(False)
         self.progress = ttk.Progressbar(bottom, mode="determinate")
-        self.progress.pack(side="left", fill="x", expand=True)
+        self.progress.pack(side="left", fill="x", expand=True, pady=(14, 12))
         self.start_button = Button(
             bottom,
             text="开始转换",
@@ -744,7 +745,7 @@ class ImageConverterApp:
             activeforeground="white",
             font=("Microsoft YaHei UI", 10, "bold"),
         )
-        self.start_button.pack(side="left", padx=(10, 0), ipady=2)
+        self.start_button.pack(side="left", fill="y", padx=(10, 0), pady=(4, 4))
         for drop_widget in (preview, self.tree, self.grid_canvas):
             self._enable_batch_drop(drop_widget)
         self._build_single_editor_tab(module_font)
