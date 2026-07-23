@@ -6,6 +6,7 @@ import re
 import io
 import json
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -34,7 +35,7 @@ from tkinter import (
 from tkinter import font as tkfont
 from tkinter import ttk
 
-from PIL import Image, ImageDraw, ImageFont, ImageGrab, ImageTk
+from PIL import Image, ImageDraw, ImageFont, ImageGrab, ImageOps, ImageTk
 
 try:
     import pillow_heif  # type: ignore[import-not-found]
@@ -49,7 +50,7 @@ SUPPORTED_INPUTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", "
 SKIP_DIR_NAMES = {"渐进式JPG", "AI_language_check_contact_sheets", "AI_language_text_check_sheets", "AI_language_category_sheets"}
 PRESETS_FILE = Path(__file__).with_name("image_converter_presets.json")
 INVALID_FILENAME_CHARS = r'<>:"/\|?*'
-APP_VERSION = "v1.4.5"
+APP_VERSION = "v1.4.6"
 DEFAULT_PRESETS = {
     "Amazon主图优化": {
         "output_format": "jpg",
@@ -148,6 +149,22 @@ class ConvertJob:
     message: str = ""
 
 
+@dataclass(frozen=True)
+class WorkflowModule:
+    id: str
+    name: str
+    enabled: bool
+    summary: str
+    panel_key: str
+
+
+@dataclass(frozen=True)
+class ProcessingStep:
+    id: str
+    name: str
+    module_id: str
+
+
 class ImageConverterApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
@@ -174,6 +191,40 @@ class ImageConverterApp:
         self.worker: threading.Thread | None = None
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.target_conflict_error = ""
+        self.workflow_cards: dict[str, Frame] = {}
+        self.parameter_panels: dict[str, LabelFrame] = {}
+        self.parameter_panel_pack: dict[str, dict[str, object]] = {}
+        self.parameter_panel_children: dict[str, list[tuple[object, dict[str, object]]]] = {}
+        self.parameter_panel_expanded: dict[str, bool] = {
+            "format": True,
+            "size": False,
+            "rename": False,
+            "watermark": False,
+        }
+        self.parameter_summary_vars: dict[str, StringVar] = {
+            "format": StringVar(value=""),
+            "size": StringVar(value=""),
+            "rename": StringVar(value=""),
+            "watermark": StringVar(value=""),
+        }
+        self.parameter_toggle_buttons: dict[str, Button] = {}
+        self.workflow_ui_after_id: str | None = None
+        self.task_ui_after_id: str | None = None
+        self.last_task_ui_update = 0.0
+        self.current_processing_steps: list[ProcessingStep] = []
+        self.current_processing_index = 0
+        self.processing_step_states: dict[str, str] = {}
+        self.task_stats = {
+            "total_steps": 0,
+            "completed_steps": 0,
+            "ok": 0,
+            "failed": 0,
+            "skipped": 0,
+            "unselected": 0,
+            "current_file": "",
+            "current_step": "等待开始转换",
+            "started_at": None,
+        }
 
         self.mode = StringVar(value="folder")
         self.format_conversion_enabled = BooleanVar(value=True)
@@ -222,11 +273,10 @@ class ImageConverterApp:
         self.watermark_custom_y = DoubleVar(value=-1.0)
         self.heic_notice = StringVar(value="")
         self.preset_summary = StringVar(value="选择预设后会自动回填格式、尺寸和处理规则。")
-        self.workflow_format_text = StringVar(value="")
-        self.workflow_size_text = StringVar(value="")
-        self.workflow_rename_text = StringVar(value="")
-        self.workflow_watermark_text = StringVar(value="")
         self.workflow_stats_text = StringVar(value="")
+        self.task_current_file_text = StringVar(value="当前文件：-")
+        self.task_current_step_text = StringVar(value="当前步骤：等待开始转换")
+        self.task_progress_text = StringVar(value="总进度：0%")
         self.preview_zoom = IntVar(value=100)
         self.preview_zoom_text = StringVar(value="100%")
         self.search_text = StringVar(value="")
@@ -294,7 +344,7 @@ class ImageConverterApp:
     def _preset_summary_text(self, name: str) -> str:
         values = self.presets.get(name)
         if not values:
-            return "自定义尺寸规则。"
+            return "自定义处理方案。"
         mode = str(values.get("resize_mode", "none"))
         if mode == "exact":
             width = int(values.get("resize_width", 0) or 0)
@@ -306,7 +356,9 @@ class ImageConverterApp:
             size = f"按比例缩放 {int(values.get('resize_scale_percent', 100) or 100)}%"
         else:
             size = "不改变尺寸"
-        return f"已套用尺寸：{name} / {size}"
+        out_format = str(values.get("output_format", "jpg")).upper()
+        quality = int(values.get("quality", 92) or 92)
+        return f"已套用：{name} / {out_format} / {size} / 质量 {quality}%"
 
     def _preset_key_from_display(self, display_name: str) -> str:
         if display_name in self.presets:
@@ -370,14 +422,50 @@ class ImageConverterApp:
         if not values:
             return
         self.preset_name.set(self._preset_display_name(name))
+        self.format_conversion_enabled.set(True)
+        self.output_format.set(str(values.get("output_format", "jpg")))
+        self.quality.set(int(values.get("quality", 92)))
+        self.progressive_jpg.set(bool(values.get("progressive_jpg", False)))
+        self.preserve_structure.set(bool(values.get("preserve_structure", True)))
+        self.alpha_bg.set(str(values.get("alpha_bg", "#ffffff")))
+        self.compression_enabled.set(bool(values.get("compression_enabled", True)))
+        self.compression_mode.set(str(values.get("compression_mode", "quality")))
+        self.target_size.set(str(values.get("target_size", "")))
+        self.size_compress_enabled.set(bool(values.get("resize_enabled", str(values.get("resize_mode", "none")) != "none") or values.get("compression_enabled", True)))
         self.resize_enabled.set(bool(values.get("resize_enabled", str(values.get("resize_mode", "none")) != "none")))
         self.resize_mode.set(str(values.get("resize_mode", "none")))
         self.resize_width.set(int(values.get("resize_width", 0)))
         self.resize_height.set(int(values.get("resize_height", 0)))
         self.resize_scale_percent.set(int(values.get("resize_scale_percent", 100)))
         self.resize_fit_mode.set(str(values.get("resize_fit_mode", "pad")))
+        self.rename_enabled.set(bool(values.get("rename_enabled", False)))
+        self.rename_template.set(str(values.get("rename_template", "{name}")))
+        self.rename_prefix.set(str(values.get("rename_prefix", "")))
+        self.rename_suffix.set(str(values.get("rename_suffix", "")))
+        self.rename_find.set(str(values.get("rename_find", "")))
+        self.rename_replace.set(str(values.get("rename_replace", "")))
+        raw_rules = values.get("rename_replace_rules", [])
+        self.rename_replace_rules = [tuple(rule) for rule in raw_rules if isinstance(rule, (list, tuple)) and len(rule) == 2]  # type: ignore[list-item]
+        self.rename_start.set(int(values.get("rename_start", 1)))
+        self._update_rename_rules_summary()
+        self.watermark_enabled.set(bool(values.get("watermark_enabled", False)))
+        self.watermark_type.set(str(values.get("watermark_type", "text")))
+        self.watermark_text.set(str(values.get("watermark_text", "")))
+        self.watermark_logo.set(str(values.get("watermark_logo", "")))
+        self.watermark_position.set(str(values.get("watermark_position", "右下")))
+        self.watermark_opacity.set(int(values.get("watermark_opacity", 45)))
+        self.watermark_margin.set(int(values.get("watermark_margin", 24)))
+        self.watermark_font_size.set(int(values.get("watermark_font_size", 36)))
+        self.watermark_color.set(str(values.get("watermark_color", "#ffffff")))
+        self.watermark_outline.set(bool(values.get("watermark_outline", True)))
+        self.watermark_shadow.set(bool(values.get("watermark_shadow", True)))
+        self.watermark_scale_percent.set(int(values.get("watermark_scale_percent", 100)))
+        self.watermark_angle.set(int(values.get("watermark_angle", 0)))
+        self.watermark_custom_x.set(float(values.get("watermark_custom_x", -1.0)))
+        self.watermark_custom_y.set(float(values.get("watermark_custom_y", -1.0)))
         self.preset_summary.set(self._preset_summary_text(name))
-        self._on_resize_mode_change()
+        self._update_control_states()
+        self.scan_jobs()
 
     def _preset_display_name(self, name: str) -> str:
         values = self.presets.get(name, {})
@@ -514,13 +602,8 @@ class ImageConverterApp:
 
         workflow_box = LabelFrame(opts, text="当前处理流程", font=section_font)
         workflow_box.pack(fill="x", pady=(0, 6))
-        for text_var in (
-            self.workflow_format_text,
-            self.workflow_size_text,
-            self.workflow_rename_text,
-            self.workflow_watermark_text,
-        ):
-            Label(workflow_box, textvariable=text_var, anchor="w", font=("Microsoft YaHei UI", 9)).pack(fill="x", padx=10, pady=(3, 0))
+        self.workflow_cards_frame = Frame(workflow_box)
+        self.workflow_cards_frame.pack(fill="x", padx=8, pady=(6, 2))
         Label(
             workflow_box,
             textvariable=self.workflow_stats_text,
@@ -529,7 +612,7 @@ class ImageConverterApp:
             font=("Microsoft YaHei UI", 9, "bold"),
         ).pack(fill="x", padx=10, pady=(3, 7))
 
-        preset_box = LabelFrame(opts, labelwidget=self._make_section_label("批量尺寸", self.resize_enabled, self._on_resize_mode_change), font=section_font)
+        preset_box = LabelFrame(opts, text="处理预设", font=section_font)
         preset_box.pack(fill="x", pady=(0, 6))
         preset_row = Frame(preset_box)
         preset_row.pack(fill="x", padx=10, pady=7)
@@ -539,7 +622,7 @@ class ImageConverterApp:
         Button(preset_row, text="保存预设", command=self.save_current_preset, width=10).pack(side="left", padx=(8, 0))
         Label(preset_box, textvariable=self.preset_summary, fg="#0b5cad", anchor="w", wraplength=500).pack(fill="x", padx=10, pady=(0, 7))
 
-        base_box = LabelFrame(opts, labelwidget=self._make_section_label("格式转换", self.format_conversion_enabled, self._on_output_format_change), font=section_font)
+        base_box = LabelFrame(opts, labelwidget=self._make_section_label("格式与输出", self.format_conversion_enabled, self._on_output_format_change, "format"), font=section_font)
         base_box.pack(fill="x", pady=6)
         self.format_controls: list[object] = []
         base_row1 = Frame(base_box)
@@ -561,7 +644,7 @@ class ImageConverterApp:
         self.preserve_structure_check.pack(side="left", padx=(18, 0))
         self.format_controls.extend([self.progressive_check, self.alpha_label, self.alpha_entry, self.preserve_structure_check])
 
-        size_compress_box = LabelFrame(opts, labelwidget=self._make_section_label("尺寸 / 压缩", self.size_compress_enabled, self._on_size_compress_toggle), font=section_font)
+        size_compress_box = LabelFrame(opts, labelwidget=self._make_section_label("尺寸与压缩", self.size_compress_enabled, self._on_size_compress_toggle, "size"), font=section_font)
         size_compress_box.pack(fill="x", pady=6)
         self.resize_controls: list[object] = []
         self.compression_controls: list[object] = []
@@ -625,7 +708,7 @@ class ImageConverterApp:
             self.target_size_entry, self.target_size_unit, self.compression_hint,
         ])
 
-        rename_box = LabelFrame(opts, labelwidget=self._make_section_label("批量重命名", self.rename_enabled, lambda: (self._update_control_states(), self.scan_jobs())), font=section_font)
+        rename_box = LabelFrame(opts, labelwidget=self._make_section_label("批量重命名", self.rename_enabled, lambda: (self._update_control_states(), self.scan_jobs()), "rename"), font=section_font)
         rename_box.pack(fill="x", pady=6)
         self.rename_controls: list[object] = []
         rename_row = Frame(rename_box)
@@ -664,7 +747,7 @@ class ImageConverterApp:
             self.rename_rules_button, self.rename_rules_label,
         ])
 
-        watermark_box = LabelFrame(opts, labelwidget=self._make_section_label("批量水印", self.watermark_enabled, self._update_control_states), font=section_font)
+        watermark_box = LabelFrame(opts, labelwidget=self._make_section_label("批量水印", self.watermark_enabled, self._update_control_states, "watermark"), font=section_font)
         watermark_box.pack(fill="x", pady=6)
         watermark_row1 = Frame(watermark_box)
         watermark_row1.pack(fill="x", padx=8, pady=(5, 2))
@@ -737,6 +820,11 @@ class ImageConverterApp:
         ])
         self.watermark_logo_controls.append(self.watermark_logo_button)
 
+        self._register_parameter_panel("format", base_box)
+        self._register_parameter_panel("size", size_compress_box)
+        self._register_parameter_panel("rename", rename_box)
+        self._register_parameter_panel("watermark", watermark_box)
+
         danger_box = LabelFrame(opts, text="危险操作", font=section_font)
         danger_box.pack(fill="x", pady=(6, 0))
         danger_row = Frame(danger_box)
@@ -756,9 +844,18 @@ class ImageConverterApp:
         ):
             var.trace_add("write", lambda *_args: self._update_workflow_summary())
 
-        self.status_frame = Frame(main, height=26)
+        self.status_frame = Frame(main, height=54)
         self.status_frame.pack(fill="x", pady=(6, 0))
         self.status_frame.pack_propagate(False)
+        self.status_line_frame = Frame(self.status_frame)
+        self.status_line_frame.pack(fill="x")
+        self.task_line_frame = Frame(self.status_frame)
+        self.task_line_frame.pack(fill="x", pady=(2, 0))
+        Label(self.task_line_frame, textvariable=self.task_current_file_text, anchor="w").pack(side="left")
+        Label(self.task_line_frame, text="  |  ").pack(side="left")
+        Label(self.task_line_frame, textvariable=self.task_current_step_text, anchor="w", fg="#0b5cad", font=self.status_number_font).pack(side="left")
+        Label(self.task_line_frame, text="  |  ").pack(side="left")
+        Label(self.task_line_frame, textvariable=self.task_progress_text, anchor="w").pack(side="left")
         self._set_status_message("请选择图片或文件夹。")
 
         bottom = Frame(main, height=44)
@@ -785,11 +882,56 @@ class ImageConverterApp:
         self.root.after(220, self._set_initial_panes)
         self._bind_shortcuts()
 
-    def _make_section_label(self, text: str, variable: BooleanVar, command) -> Frame:
+    def _make_section_label(self, text: str, variable: BooleanVar, command, panel_key: str) -> Frame:
         label = Frame(self.root)
-        Label(label, text=text, font=("Microsoft YaHei UI", 10, "bold")).pack(side="left")
+        self.parameter_toggle_buttons[panel_key] = Button(
+            label,
+            text="▼" if self.parameter_panel_expanded.get(panel_key, False) else "▶",
+            width=2,
+            command=lambda key=panel_key: self._toggle_parameter_panel(key),
+        )
+        self.parameter_toggle_buttons[panel_key].pack(side="left")
+        Label(label, text=text, font=("Microsoft YaHei UI", 10, "bold")).pack(side="left", padx=(4, 0))
         Checkbutton(label, text="启用", variable=variable, command=command).pack(side="left", padx=(8, 0))
+        Label(label, textvariable=self.parameter_summary_vars[panel_key], fg="#0b5cad", font=("Microsoft YaHei UI", 9)).pack(side="left", padx=(10, 0))
         return label
+
+    def _register_parameter_panel(self, key: str, panel: LabelFrame) -> None:
+        self.parameter_panels[key] = panel
+        self.parameter_panel_pack[key] = panel.pack_info()
+        children: list[tuple[object, dict[str, object]]] = []
+        for child in panel.winfo_children():
+            try:
+                children.append((child, child.pack_info()))
+            except Exception:
+                pass
+        self.parameter_panel_children[key] = children
+        if not self.parameter_panel_expanded.get(key, False):
+            self._set_parameter_panel_expanded(key, False)
+
+    def _toggle_parameter_panel(self, key: str) -> None:
+        self._set_parameter_panel_expanded(key, not self.parameter_panel_expanded.get(key, False))
+
+    def _set_parameter_panel_expanded(self, key: str, expanded: bool) -> None:
+        self.parameter_panel_expanded[key] = expanded
+        button = self.parameter_toggle_buttons.get(key)
+        if button:
+            button.config(text="▼" if expanded else "▶")
+        for child, pack_info in self.parameter_panel_children.get(key, []):
+            try:
+                if expanded:
+                    child.pack(**pack_info)
+                else:
+                    child.pack_forget()
+            except Exception:
+                pass
+
+    def _expand_parameter_panel(self, key: str) -> None:
+        for panel_key in self.parameter_panel_expanded:
+            self._set_parameter_panel_expanded(panel_key, panel_key == key)
+        panel = self.parameter_panels.get(key)
+        if panel:
+            panel.focus_set()
 
     def _bind_shortcuts(self) -> None:
         self.root.bind("<Return>", self._shortcut_enter)
@@ -835,29 +977,35 @@ class ImageConverterApp:
 
     def _set_status_message(self, message: str) -> None:
         self.status_text.set(message)
-        if not hasattr(self, "status_frame"):
+        if not hasattr(self, "status_line_frame"):
             return
-        for child in self.status_frame.winfo_children():
+        for child in self.status_line_frame.winfo_children():
             child.destroy()
-        Label(self.status_frame, text=message, anchor="w").pack(side="left", fill="y")
+        Label(self.status_line_frame, text=message, anchor="w").pack(side="left", fill="y")
 
     def _set_status_parts(self, parts: list[tuple[str, bool]]) -> None:
         self.status_text.set("".join(text for text, _highlight in parts))
-        if not hasattr(self, "status_frame"):
+        if not hasattr(self, "status_line_frame"):
             return
-        for child in self.status_frame.winfo_children():
+        for child in self.status_line_frame.winfo_children():
             child.destroy()
         for text, highlight in parts:
             options = {"text": text, "anchor": "w"}
             if highlight:
                 options.update({"fg": "#0b5cad", "font": self.status_number_font})
-            Label(self.status_frame, **options).pack(side="left", fill="y")
+            Label(self.status_line_frame, **options).pack(side="left", fill="y")
+
+    def _set_task_status(self, current_file: str = "-", current_step: str = "等待开始转换", progress_text: str = "0%") -> None:
+        self.task_current_file_text.set(f"当前文件：{current_file or '-'}")
+        self.task_current_step_text.set(f"当前步骤：{current_step or '等待开始转换'}")
+        self.task_progress_text.set(f"总进度：{progress_text}")
 
     def _update_start_button_state(self) -> None:
         if not hasattr(self, "start_button"):
             return
         state = "disabled" if self.target_conflict_error else "normal"
-        self.start_button.config(state=state)
+        selected = sum(1 for job in self.jobs if job.selected)
+        self.start_button.config(state=state, text=f"开始转换（{selected}张）" if selected else "开始转换")
 
     def _set_initial_panes(self) -> None:
         try:
@@ -1137,7 +1285,7 @@ class ImageConverterApp:
         for row in (self.resize_none_row, self.resize_scale_row, self.resize_exact_row, self.resize_fit_row):
             row.pack_forget()
         resize_enabled = self.size_compress_enabled.get() and self.resize_enabled.get()
-        self.preset_combo.config(state="readonly" if self.resize_enabled.get() else "disabled")
+        self.preset_combo.config(state="readonly")
         resize_radio_state = "normal" if resize_enabled else "disabled"
         for widget in self.resize_controls:
             if isinstance(widget, ttk.Combobox):
@@ -1189,55 +1337,102 @@ class ImageConverterApp:
         self._update_workflow_summary()
 
     def _update_workflow_summary(self) -> None:
-        out_format = self.output_format.get().upper()
-        if self.format_conversion_enabled.get():
-            format_bits = [out_format]
-            if self.output_format.get() == "jpg" and self.progressive_jpg.get():
-                format_bits.append("渐进式")
-            if self.output_format.get() == "jpg":
-                format_bits.append(f"背景 {self.alpha_bg.get()}")
-            self.workflow_format_text.set(f"开启 格式转换：{' / '.join(format_bits)}")
-        else:
-            self.workflow_format_text.set("关闭 格式转换：保留原格式")
-
-        if self.size_compress_enabled.get():
-            size_part = "不改变尺寸"
-            if self.resize_enabled.get():
-                if self.resize_mode.get() == "scale":
-                    size_part = f"缩放 {self._safe_int_var(self.resize_scale_percent, 100)}%"
-                elif self.resize_mode.get() == "exact":
-                    fit_map = {"stretch": "拉伸", "pad": "等比留白", "crop": "等比裁剪"}
-                    fit = fit_map.get(self.resize_fit_mode.get(), self.resize_fit_mode.get())
-                    size_part = f"{self._safe_int_var(self.resize_width, 0)} x {self._safe_int_var(self.resize_height, 0)} / {fit}"
-            if self.compression_enabled.get():
-                if self.compression_mode.get() == "target":
-                    compress_part = f"目标体积 {self.target_size.get() or '-'} KB"
-                else:
-                    compress_part = f"质量 {self._safe_int_var(self.quality, 92)}%"
-            else:
-                compress_part = "不压缩"
-            self.workflow_size_text.set(f"开启 尺寸 / 压缩：{size_part} / {compress_part}")
-        else:
-            self.workflow_size_text.set("关闭 尺寸 / 压缩")
-
-        if self.rename_enabled.get():
-            template = self.rename_template.get() or "{name}"
-            rules = len(self._combined_rename_replace_rules())
-            self.workflow_rename_text.set(f"开启 重命名：{template} / 替换 {rules} 条")
-        else:
-            self.workflow_rename_text.set("关闭 重命名")
-
-        if self.watermark_enabled.get():
-            wm_type = "文字" if self.watermark_type.get() == "text" else "Logo"
-            self.workflow_watermark_text.set(
-                f"开启 水印：{wm_type} / {self.watermark_position.get()} / {self._safe_int_var(self.watermark_opacity, 45)}%"
-            )
-        else:
-            self.workflow_watermark_text.set("关闭 水印")
-
+        summaries = {
+            "format": self._format_module_summary(),
+            "size": self._size_module_summary(),
+            "rename": self._rename_module_summary(),
+            "watermark": self._watermark_module_summary(),
+        }
+        for key, summary in summaries.items():
+            self.parameter_summary_vars[key].set(summary)
         total = len(self.jobs)
         selected = sum(1 for job in self.jobs if job.selected)
-        self.workflow_stats_text.set(f"任务统计：已选择 {selected} / 总计 {total} 张")
+        enabled_steps = len([module for module in self._workflow_modules() if module.enabled])
+        self.workflow_stats_text.set(f"已选择 {selected} / {total} 张 · 启用 {enabled_steps} 个处理步骤")
+        self._schedule_workflow_render()
+
+    def _format_module_summary(self) -> str:
+        if not self.format_conversion_enabled.get():
+            return "未启用"
+        bits = [self.output_format.get().upper()]
+        if self.output_format.get() == "jpg" and self.progressive_jpg.get():
+            bits.append("渐进式")
+        if self.output_format.get() == "jpg":
+            bits.append(f"背景 {self.alpha_bg.get()}")
+        return " · ".join(bits)
+
+    def _size_module_summary(self) -> str:
+        if not self.size_compress_enabled.get():
+            return "未启用"
+        size_part = "原尺寸"
+        if self.resize_enabled.get():
+            if self.resize_mode.get() == "scale":
+                size_part = f"{self._safe_int_var(self.resize_scale_percent, 100)}%"
+            elif self.resize_mode.get() == "exact":
+                fit_map = {"stretch": "拉伸", "pad": "留白", "crop": "裁剪"}
+                fit = fit_map.get(self.resize_fit_mode.get(), self.resize_fit_mode.get())
+                size_part = f"{self._safe_int_var(self.resize_width, 0)}x{self._safe_int_var(self.resize_height, 0)} · {fit}"
+        if self.compression_enabled.get():
+            if self.compression_mode.get() == "target":
+                compress_part = f"目标 {self.target_size.get() or '-'}KB"
+            else:
+                compress_part = f"质量 {self._safe_int_var(self.quality, 92)}%"
+        else:
+            compress_part = "不压缩"
+        return f"{size_part} · {compress_part}"
+
+    def _rename_module_summary(self) -> str:
+        if not self.rename_enabled.get():
+            return "未启用"
+        template = self.rename_template.get().strip() or "{name}"
+        rules = len(self.rename_replace_rules) + (1 if self.rename_find.get() else 0)
+        return f"{template} · 替换 {rules} 条"
+
+    def _watermark_module_summary(self) -> str:
+        if not self.watermark_enabled.get():
+            return "未启用"
+        wm_type = "文字" if self.watermark_type.get() == "text" else "Logo"
+        return f"{wm_type} · {self.watermark_position.get()} · {self._safe_int_var(self.watermark_opacity, 45)}%"
+
+    def _workflow_modules(self) -> list[WorkflowModule]:
+        return [
+            WorkflowModule("format", "格式与输出", self.format_conversion_enabled.get(), self._format_module_summary(), "format"),
+            WorkflowModule("size", "尺寸与压缩", self.size_compress_enabled.get(), self._size_module_summary(), "size"),
+            WorkflowModule("rename", "批量重命名", self.rename_enabled.get(), self._rename_module_summary(), "rename"),
+            WorkflowModule("watermark", "批量水印", self.watermark_enabled.get(), self._watermark_module_summary(), "watermark"),
+        ]
+
+    def _schedule_workflow_render(self) -> None:
+        if self.workflow_ui_after_id:
+            self.root.after_cancel(self.workflow_ui_after_id)
+        self.workflow_ui_after_id = self.root.after(80, self._render_workflow_cards)
+
+    def _render_workflow_cards(self) -> None:
+        self.workflow_ui_after_id = None
+        if not hasattr(self, "workflow_cards_frame"):
+            return
+        for child in self.workflow_cards_frame.winfo_children():
+            child.destroy()
+        self.workflow_cards.clear()
+        enabled_modules = [module for module in self._workflow_modules() if module.enabled]
+        if not enabled_modules:
+            Label(self.workflow_cards_frame, text="未启用处理步骤，当前仅扫描和预览图片。", fg="#666", anchor="w").pack(fill="x", pady=3)
+            return
+        for index, module in enumerate(enabled_modules, start=1):
+            card = Frame(self.workflow_cards_frame, bd=1, relief="solid", bg="#f7fbff", padx=8, pady=5)
+            card.pack(fill="x", pady=(0, 5))
+            Button(
+                card,
+                text=f"{index}. {module.name}",
+                command=lambda key=module.panel_key: self._expand_parameter_panel(key),
+                anchor="w",
+                relief="flat",
+                bg="#f7fbff",
+                fg="#0b5cad",
+                font=("Microsoft YaHei UI", 9, "bold"),
+            ).pack(fill="x")
+            Label(card, text=module.summary, anchor="w", fg="#333", bg="#f7fbff", wraplength=500).pack(fill="x", pady=(2, 0))
+            self.workflow_cards[module.id] = card
 
     def choose_output(self) -> None:
         folder = filedialog.askdirectory(title="选择输出文件夹")
@@ -1339,6 +1534,7 @@ class ImageConverterApp:
         self._update_selected_status()
         self._update_start_button_state()
         self.progress.config(value=0, maximum=max(1, len(self.jobs)))
+        self._set_task_status("-", "等待开始转换", "0%")
 
     @staticmethod
     def _source_key(source: Path) -> str:
@@ -1581,8 +1777,7 @@ class ImageConverterApp:
                     node_map[cumulative] = node_id
                     self.tree_nodes[node_id] = {"kind": "folder", "name": part}
                 parent_id = node_map[cumulative]
-            display_name = rel.name if rel.name == job.target.name else f"{rel.name} -> {job.target.name}"
-            job.tree_id = self.tree.insert(parent_id, "end", text=display_name, image=self.tree_icons[("file", "checked" if job.selected else "unchecked")])
+            job.tree_id = self.tree.insert(parent_id, "end", text=rel.name, image=self.tree_icons[("file", "checked" if job.selected else "unchecked")])
             self.tree_nodes[job.tree_id] = {"kind": "file", "job_index": idx, "name": rel.name}
         self._refresh_folder_states()
 
@@ -1623,18 +1818,42 @@ class ImageConverterApp:
         rel = self._display_source_rel(job.source)
         name_label = Label(card, text=rel.name, width=text_width, anchor="center", bg="#f5f5f5")
         name_label.pack(pady=(4, 0))
-        parent = str(rel.parent) if str(rel.parent) != "." else "(根目录)"
-        parent_label = Label(card, text=parent, width=text_width, anchor="center", fg="#666", bg="#f5f5f5")
-        parent_label.pack()
-        target_label = Label(card, text=f"-> {job.target.name}", width=text_width, anchor="center", fg="#0b5cad", bg="#f5f5f5")
+        source_format = self._source_format_label(job.source)
+        target_format = self._effective_output_format(job.source).upper()
+        format_label = Label(card, text=f"{source_format} → {target_format}", width=text_width, anchor="center", fg="#666", bg="#f5f5f5")
+        format_label.pack()
+        target_label = Label(card, text=f"输出：{job.target.name}", width=text_width, anchor="center", fg="#0b5cad", bg="#f5f5f5")
         target_label.pack()
+        status_label = Label(card, text="", width=text_width, anchor="center", fg="#b42318", bg="#f5f5f5")
+        if job.status == "failed":
+            status_label.config(text="失败：点击查看原因")
+            status_label.pack()
+        elif job.status == "done":
+            status_label.config(text="已完成", fg="#667085")
+            status_label.pack()
+        elif job.status == "skipped":
+            status_label.config(text="已跳过", fg="#9a6400")
+            status_label.pack()
         card.bind("<Button-1>", lambda _e, i=idx: self._schedule_card_preview(i))
         self._bind_card_hover(card)
-        for clickable in (image_label, name_label, parent_label, target_label):
+        for clickable in (image_label, name_label, format_label, target_label, status_label):
             clickable.bind("<Button-1>", lambda _e, i=idx: self._schedule_card_preview(i))
+        status_label.bind("<Button-1>", lambda _e, i=idx: self._show_job_error(i))
         image_label.bind("<Double-Button-1>", lambda _e, i=idx: self._open_card_editor(i))
         for widget in [card, top, image_label, *card.winfo_children()]:
             widget.bind("<MouseWheel>", self._on_grid_mousewheel, add="+")
+
+    @staticmethod
+    def _source_format_label(path: Path) -> str:
+        suffix = path.suffix.lower().lstrip(".")
+        return "JPG" if suffix == "jpeg" else (suffix.upper() or "FILE")
+
+    def _show_job_error(self, job_index: int) -> str:
+        if 0 <= job_index < len(self.jobs):
+            job = self.jobs[job_index]
+            if job.message:
+                messagebox.showerror("图片处理失败", f"源文件：\n{job.source}\n\n目标文件：\n{job.target}\n\n原因：\n{job.message}")
+        return "break"
 
     def _bind_card_hover(self, card: Frame) -> None:
         def apply_bg(widget, color: str) -> None:
@@ -1867,12 +2086,15 @@ class ImageConverterApp:
             ])
             return
         selected = sum(1 for job in self.jobs if job.selected)
+        enabled_steps = len([module for module in self._workflow_modules() if module.enabled])
         self._set_status_parts([
             ("已扫描 ", False),
             (str(len(self.jobs)), True),
             (" 张图片，已选择 ", False),
             (str(selected), True),
-            (" 张。", False),
+            (" 张，启用 ", False),
+            (str(enabled_steps), True),
+            (" 个处理步骤。", False),
         ])
 
     def _on_grid_configure(self, _event) -> None:
@@ -1886,6 +2108,55 @@ class ImageConverterApp:
         step = -1 if event.delta > 0 else 1
         self.grid_canvas.yview_scroll(step * 3, "units")
         return "break"
+
+    def _processing_steps_for_job(self, job: ConvertJob) -> list[ProcessingStep]:
+        steps = [
+            ProcessingStep("prepare_output", "准备输出路径", "format"),
+            ProcessingStep("read_image", "读取图片", "format"),
+            ProcessingStep("fix_orientation", "修正图片方向", "format"),
+        ]
+        if self.size_compress_enabled.get() and self.resize_enabled.get() and self.resize_mode.get() != "none":
+            steps.append(ProcessingStep("resize", "调整尺寸", "size"))
+        if self.watermark_enabled.get():
+            steps.append(ProcessingStep("watermark", "添加水印", "watermark"))
+        steps.extend([
+            ProcessingStep("convert_mode", "转换颜色模式", "format"),
+            ProcessingStep("encode_save", f"编码保存 {self._effective_output_format(job.source).upper()}", "format"),
+            ProcessingStep("verify_output", "验证输出文件", "format"),
+        ])
+        if self.delete_originals.get():
+            steps.append(ProcessingStep("delete_original", "删除原图", "format"))
+        steps.append(ProcessingStep("complete", "完成", "format"))
+        return steps
+
+    def _emit_processing_step(
+        self,
+        job: ConvertJob,
+        steps: list[ProcessingStep],
+        current_index: int,
+        completed_steps: int,
+        total_steps: int,
+        status: str = "running",
+        error: str = "",
+        force: bool = False,
+    ) -> None:
+        now = time.monotonic()
+        if not force and now - self.last_task_ui_update < 0.06:
+            return
+        self.last_task_ui_update = now
+        self.events.put((
+            "step",
+            {
+                "job_key": self._source_key(job.source),
+                "file": job.source.name,
+                "steps": steps,
+                "current_index": current_index,
+                "completed_steps": completed_steps,
+                "total_steps": max(1, total_steps),
+                "status": status,
+                "error": error,
+            },
+        ))
 
     def start_convert(self) -> None:
         if self.worker and self.worker.is_alive():
@@ -1913,7 +2184,12 @@ class ImageConverterApp:
             ok = messagebox.askyesno("确认删除原图", "转换成功后会删除原图。请确认你已经备份或确实不再需要原图。")
             if not ok:
                 return
-        self.progress.config(value=0, maximum=len(selected_jobs))
+        for job in self.jobs:
+            job.status = "pending"
+            job.message = ""
+        total_steps = sum(len(self._processing_steps_for_job(job)) for job in selected_jobs)
+        self.progress.config(value=0, maximum=max(1, total_steps))
+        self._set_task_status("-", "等待开始转换", "0%")
         self._set_status_message("开始转换...")
         self.worker = threading.Thread(target=self._convert_worker, args=(selected_jobs,), daemon=True)
         self.worker.start()
@@ -1943,6 +2219,9 @@ class ImageConverterApp:
         ok = failed = skipped = 0
         unselected = len(self.jobs) - len(selected_jobs)
         failures: list[str] = []
+        started_at = time.monotonic()
+        total_steps = sum(len(self._processing_steps_for_job(job)) for job in selected_jobs)
+        completed_steps = 0
         report = [
             f"Image conversion report: {datetime.now():%Y-%m-%d %H:%M:%S}",
             f"Format conversion enabled: {self.format_conversion_enabled.get()}",
@@ -1956,31 +2235,65 @@ class ImageConverterApp:
             "",
         ]
         for index, job in enumerate(selected_jobs, start=1):
+            steps = self._processing_steps_for_job(job)
+            step_index = 0
+
+            def emit(step_id: str, force: bool = True) -> None:
+                nonlocal step_index, completed_steps
+                for found_index, step in enumerate(steps):
+                    if step.id == step_id:
+                        step_index = found_index
+                        break
+                self._emit_processing_step(job, steps, step_index, completed_steps, total_steps, force=force)
+
+            def finish_step(step_id: str) -> None:
+                nonlocal completed_steps
+                emit(step_id, force=True)
+                completed_steps += 1
+                self._emit_processing_step(job, steps, step_index, completed_steps, total_steps, force=True)
+
             try:
                 if job.target.exists() and not self.overwrite.get():
                     skipped += 1
+                    completed_steps += len(steps)
+                    job.status = "skipped"
+                    job.message = "目标文件已存在，未启用覆盖。"
                     report.append(f"[SKIP] {job.source} -> {job.target} (target exists)")
                 else:
                     before_size = job.source.stat().st_size if job.source.exists() else 0
-                    self._convert_one(job.source, job.target)
+                    self._convert_one(job.source, job.target, step_callback=finish_step)
                     after_size = job.target.stat().st_size if job.target.exists() else 0
                     if self.delete_originals.get() and job.source.resolve() != job.target.resolve():
+                        emit("delete_original", force=True)
                         job.source.unlink()
+                        completed_steps += 1
                     ok += 1
+                    job.status = "done"
+                    job.message = ""
+                    if completed_steps < total_steps:
+                        finish_step("complete")
                     report.append(f"[OK] {job.source} -> {job.target} ({self._format_bytes(before_size)} -> {self._format_bytes(after_size)})")
             except Exception as exc:  # noqa: BLE001
                 failed += 1
+                completed_steps += max(0, len(steps) - sum(1 for _step in steps[: step_index + 1]))
+                job.status = "failed"
+                job.message = str(exc)
+                self._emit_processing_step(job, steps, step_index, completed_steps, total_steps, status="failed", error=str(exc), force=True)
                 message = f"{job.source} -> {job.target} ({exc})"
                 failures.append(message)
                 report.append(f"[FAIL] {message}")
-            self.events.put(("progress", (index, len(selected_jobs), ok, failed, skipped)))
+            self.events.put(("job_status", self._source_key(job.source)))
+            self.events.put(("progress", (completed_steps, total_steps, index, len(selected_jobs), ok, failed, skipped)))
         report_path = Path(self.output_text.get().strip()) / "conversion_report.txt"
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text("\n".join(report), encoding="utf-8")
-        self.events.put(("done", (ok, failed, skipped, unselected, report_path, failures)))
+        elapsed = time.monotonic() - started_at
+        self.events.put(("done", (ok, failed, skipped, unselected, report_path, failures, elapsed)))
 
-    def _convert_one(self, source: Path, target: Path) -> None:
+    def _convert_one(self, source: Path, target: Path, step_callback=None) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
+        if step_callback:
+            step_callback("prepare_output")
         if source.suffix.lower() in {".heic", ".heif"} and not HEIC_ENABLED:
             raise ValueError("当前环境未安装 HEIC 支持库，无法读取 HEIC/HEIF 图片")
         out_format = self._effective_output_format(source)
@@ -1989,14 +2302,25 @@ class ImageConverterApp:
         target_bytes = self._parse_target_size(self.target_size.get()) if compression_enabled and self.compression_mode.get() == "target" and out_format in {"jpg", "webp"} else None
         save_quality = self._safe_int_var(self.quality, 92) if compression_enabled else 95
         with Image.open(source) as im:
+            if step_callback:
+                step_callback("read_image")
+            im = ImageOps.exif_transpose(im)
+            if step_callback:
+                step_callback("fix_orientation")
             im = self._resize_image(im, bg)
+            if step_callback and self.size_compress_enabled.get() and self.resize_enabled.get() and self.resize_mode.get() != "none":
+                step_callback("resize")
             im = self._apply_watermark(im)
+            if step_callback and self.watermark_enabled.get():
+                step_callback("watermark")
             if out_format == "jpg":
                 im = self._flatten_alpha(im, bg)
             elif out_format == "webp":
                 im = im.convert("RGBA") if im.mode in {"RGBA", "LA", "P"} else im.convert("RGB")
             elif out_format == "png":
                 im = im.convert("RGBA") if im.mode in {"RGBA", "LA", "P"} else im.convert("RGB")
+            if step_callback:
+                step_callback("convert_mode")
             if out_format == "jpg":
                 self._save_with_quality_target(im, target, "JPEG", save_quality, target_bytes, progressive=bool(self.progressive_jpg.get()))
             elif out_format == "webp":
@@ -2009,6 +2333,12 @@ class ImageConverterApp:
                 im.convert("RGBA").save(target, format="TIFF")
             else:
                 raise ValueError(f"Unsupported output format: {out_format}")
+            if step_callback:
+                step_callback("encode_save")
+        if not target.exists():
+            raise ValueError("输出文件未生成")
+        if step_callback:
+            step_callback("verify_output")
 
     @staticmethod
     def _flatten_alpha(im: Image.Image, bg: tuple[int, int, int]) -> Image.Image:
@@ -2445,21 +2775,76 @@ class ImageConverterApp:
         self.thumb_cache.clear()
         self.scan_jobs()
 
+    def _apply_step_event(self, payload: dict[str, object]) -> None:
+        steps = payload.get("steps", [])
+        current_index = int(payload.get("current_index", 0) or 0)
+        completed_steps = int(payload.get("completed_steps", 0) or 0)
+        total_steps = int(payload.get("total_steps", 1) or 1)
+        status = str(payload.get("status", "running"))
+        error = str(payload.get("error", ""))
+        if not isinstance(steps, list):
+            return
+        current_file = str(payload.get("file", "-"))
+        current_step = steps[current_index].name if steps and 0 <= current_index < len(steps) else "-"
+        if status == "failed":
+            current_step = f"失败：{error or current_step}"
+        percent = int(completed_steps * 100 / max(1, total_steps))
+        self.task_current_file_text.set(f"当前文件：{current_file}")
+        self.task_current_step_text.set(f"当前步骤：{current_step}")
+        self.task_progress_text.set(f"总进度：{percent}%")
+        self._render_current_steps(steps, current_index, completed_steps, status)
+
+    def _render_current_steps(self, steps: list[ProcessingStep], current_index: int, completed_steps: int, status: str) -> None:
+        if not hasattr(self, "task_line_frame"):
+            return
+        # Keep the compact current line stable; detailed step state is exposed in the status text.
+        visible_start = max(0, min(current_index - 2, max(0, len(steps) - 5)))
+        visible = steps[visible_start: visible_start + 5]
+        parts: list[str] = []
+        for absolute_index, step in enumerate(visible, start=visible_start):
+            if status == "failed" and absolute_index == current_index:
+                marker = "!"
+            elif absolute_index < current_index:
+                marker = "✓"
+            elif absolute_index == current_index:
+                marker = "●"
+            else:
+                marker = "○"
+            parts.append(f"{marker}{step.name}")
+        prefix = "…" if visible_start > 0 else ""
+        suffix = "…" if visible_start + len(visible) < len(steps) else ""
+        compact = "  ".join(parts)
+        self.task_current_step_text.set(f"当前步骤：{prefix}{compact}{suffix}")
+
+    def _refresh_job_card_by_key(self, source_key: str) -> None:
+        for idx, job in enumerate(self.jobs):
+            if self._source_key(job.source) == source_key:
+                self._populate_grid()
+                if job.tree_id:
+                    self.tree.item(job.tree_id, image=self.tree_icons[("file", "checked" if job.selected else "unchecked")])
+                break
+
     def _drain_events(self) -> None:
         try:
             while True:
                 kind, payload = self.events.get_nowait()
+                if kind == "step":
+                    self._apply_step_event(payload)  # type: ignore[arg-type]
+                elif kind == "job_status":
+                    self._refresh_job_card_by_key(str(payload))
                 if kind == "progress":
-                    index, total, ok, failed, skipped = payload  # type: ignore[misc]
-                    self.progress.config(value=index)
+                    completed_steps, total_steps, index, total, ok, failed, skipped = payload  # type: ignore[misc]
+                    self.progress.config(value=completed_steps, maximum=max(1, total_steps))
+                    percent = int(completed_steps * 100 / max(1, total_steps))
                     self._set_status_parts([
                         ("处理中 ", False), (f"{index}/{total}", True),
                         ("，成功 ", False), (str(ok), True),
                         ("，失败 ", False), (str(failed), True),
                         ("，跳过 ", False), (str(skipped), True),
                     ])
+                    self.task_progress_text.set(f"总进度：{percent}%")
                 elif kind == "done":
-                    ok, failed, skipped, unselected, report_path, failures = payload  # type: ignore[misc]
+                    ok, failed, skipped, unselected, report_path, failures, elapsed = payload  # type: ignore[misc]
                     self._set_status_parts([
                         ("完成：成功 ", False), (str(ok), True),
                         ("，失败 ", False), (str(failed), True),
@@ -2467,7 +2852,8 @@ class ImageConverterApp:
                         ("，未选 ", False), (str(unselected), True),
                         (f"。报告：{report_path}", False),
                     ])
-                    summary = f"成功 {ok}\n失败 {failed}\n跳过 {skipped}\n未选 {unselected}\n\n报告：{report_path}"
+                    self._set_task_status("-", "本次任务已完成", "100%")
+                    summary = f"成功 {ok}\n失败 {failed}\n跳过 {skipped}\n未选 {unselected}\n耗时 {elapsed:.1f} 秒\n\n报告：{report_path}"
                     if failures:
                         shown = "\n".join(str(item) for item in failures[:8])
                         more = "" if len(failures) <= 8 else f"\n... 还有 {len(failures) - 8} 条，详见报告。"
