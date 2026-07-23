@@ -415,7 +415,19 @@ class ImageConverterApp:
         main = Frame(self.notebook, padx=12, pady=12)
         self.notebook.add(main, text="批量转换")
 
-        top_area = Frame(main)
+        body = Frame(main)
+        body.pack(fill="both", expand=True)
+
+        left_col = Frame(body)
+        left_col.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        settings_shell = LabelFrame(body, text="批量处理设置", font=module_font, width=560)
+        settings_shell.pack(side="right", fill="y")
+        settings_shell.pack_propagate(False)
+        opts = Frame(settings_shell)
+        opts.pack(fill="both", expand=True, padx=8, pady=8)
+
+        top_area = Frame(left_col)
         top_area.pack(fill="x", pady=(0, 8))
 
         top = LabelFrame(top_area, text="输入", font=module_font)
@@ -440,11 +452,8 @@ class ImageConverterApp:
         Button(out_row, text="选择输出目录", command=self.choose_output, width=14).pack(side="left", padx=(8, 0))
         Button(out_row, text="打开输出目录", command=self.open_output_dir, width=14).pack(side="left", padx=(8, 0))
 
-        content = PanedWindow(main, orient="horizontal", sashwidth=7)
-        self.content_panes = content
-        content.pack(fill="both", expand=True)
-
-        preview = LabelFrame(content, text="预览", font=module_font)
+        preview = LabelFrame(left_col, text="预览", font=module_font)
+        preview.pack(fill="both", expand=True)
         filter_row = Frame(preview)
         filter_row.pack(fill="x", padx=10, pady=(8, 0))
         Label(filter_row, text="格式").pack(side="left")
@@ -497,12 +506,6 @@ class ImageConverterApp:
         self.grid_canvas.bind("<MouseWheel>", self._on_grid_mousewheel)
         self.grid_inner.bind("<MouseWheel>", self._on_grid_mousewheel)
         panes.add(grid_outer, minsize=760)
-        content.add(preview, minsize=1050)
-
-        settings_shell = LabelFrame(content, text="批量处理设置", font=module_font)
-        opts = Frame(settings_shell)
-        opts.pack(fill="both", expand=True, padx=8, pady=8)
-        content.add(settings_shell, minsize=560)
 
         preset_box = LabelFrame(opts, labelwidget=self._make_section_label("批量尺寸", self.resize_enabled, self._on_resize_mode_change), font=section_font)
         preset_box.pack(fill="x", pady=(0, 6))
@@ -829,9 +832,6 @@ class ImageConverterApp:
 
     def _set_initial_panes(self) -> None:
         try:
-            total = self.content_panes.winfo_width()
-            if total > 0:
-                self.content_panes.sash_place(0, int(total * 0.70), 0)
             preview_total = self.preview_panes.winfo_width()
             if preview_total > 0:
                 self.preview_panes.sash_place(0, int(preview_total * 0.32), 0)
