@@ -767,6 +767,29 @@ class ImageConverterApp:
         self.root.bind("<Control-V>", self._shortcut_paste_single)
         self.root.bind("<Key-r>", self._shortcut_reset_single)
         self.root.bind("<Key-R>", self._shortcut_reset_single)
+        self.root.bind_all("<Button-1>", self._blur_text_input_on_outside_click, add="+")
+
+    def _blur_text_input_on_outside_click(self, event) -> None:
+        widget = event.widget
+        if self._is_text_input_widget(widget):
+            return
+        try:
+            top = widget.winfo_toplevel()
+            top.focus_set()
+        except Exception:
+            pass
+
+    def _is_text_input_widget(self, widget) -> bool:
+        input_classes = {"Entry", "TEntry", "Spinbox", "TSpinbox", "Combobox", "TCombobox", "Listbox"}
+        current = widget
+        while current is not None:
+            try:
+                if current.winfo_class() in input_classes:
+                    return True
+                current = current.master
+            except Exception:
+                return False
+        return False
 
     def _shortcut_enter(self, _event) -> str | None:
         if self.notebook.index("current") == 0:
