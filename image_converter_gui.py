@@ -225,6 +225,9 @@ class ImageConverterApp:
         self.workflow_cursor_label: Label | None = None
         self.workflow_cursor_text_label: Label | None = None
         self.workflow_cursor_status = "idle 0%"
+        self.workflow_seen_module_ids: set[str] = set()
+        self.workflow_typing_limits: dict[str, int] = {}
+        self.workflow_typing_after_id: str | None = None
         self.task_ui_after_id: str | None = None
         self.last_task_ui_update = 0.0
         self.current_processing_steps: list[ProcessingStep] = []
@@ -259,7 +262,7 @@ class ImageConverterApp:
         self.compression_mode = StringVar(value="quality")
         self.compression_enabled = BooleanVar(value=True)
         self.target_size = StringVar(value="")
-        self.size_compress_enabled = BooleanVar(value=True)
+        self.size_compress_enabled = BooleanVar(value=False)
         self.resize_enabled = BooleanVar(value=False)
         self.resize_mode = StringVar(value="none")
         self.resize_width = IntVar(value=0)
@@ -1500,6 +1503,14 @@ class ImageConverterApp:
         self.workflow_cards.clear()
         self.workflow_cursor_label = None
         modules = [module for module in self._workflow_modules() if module.enabled]
+        module_ids = {module.id for module in modules}
+        for module in modules:
+            if module.id not in self.workflow_seen_module_ids:
+                self.workflow_typing_limits[module.id] = 1
+        self.workflow_seen_module_ids = module_ids
+        for module_id in list(self.workflow_typing_limits):
+            if module_id not in module_ids:
+                self.workflow_typing_limits.pop(module_id, None)
         if not modules:
             row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg="#050505", padx=6, pady=0)
             row.pack(fill="x")
@@ -1514,19 +1525,24 @@ class ImageConverterApp:
             _marker, marker_fg, _row_bg, title_fg = self._workflow_status_style(status)
             row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg="#050505", padx=6, pady=0)
             row.pack(fill="x")
-            self._terminal_label(row, f"{index:02d}>", "#38bdf8" if status != "done" else "#94a3b8", bold=True)
-            name_label = self._terminal_label(row, f" {module.name}", title_fg, bold=True)
+            status_text = self._workflow_status_text(module.id, status)
+            total_len = len(f"{index:02d}> {module.name} | {module.summary} {status_text}")
+            limit = self.workflow_typing_limits.get(module.id, total_len)
+            remaining = limit
+            remaining = self._terminal_label_limited(row, f"{index:02d}>", "#38bdf8" if status != "done" else "#94a3b8", remaining, bold=True)
+            name_label, remaining = self._terminal_label_limited(row, f" {module.name}", title_fg, remaining, bold=True, return_label=True)
             row.bind("<Button-1>", lambda _e, key=module.panel_key: self._expand_parameter_panel(key))
-            name_label.bind("<Button-1>", lambda _e, key=module.panel_key: self._expand_parameter_panel(key))
-            self._terminal_label(row, " | ", "#64748b")
+            if name_label:
+                name_label.bind("<Button-1>", lambda _e, key=module.panel_key: self._expand_parameter_panel(key))
+            remaining = self._terminal_label_limited(row, " | ", "#64748b", remaining)
             summary_frame = Frame(row, bg="#050505")
             summary_frame.pack(side="left")
-            self._pack_terminal_summary(summary_frame, module.summary)
-            status_text = self._workflow_status_text(module.id, status)
-            if status_text:
-                self._terminal_label(row, f" {status_text}", marker_fg, bold=True)
+            remaining = self._pack_terminal_summary(summary_frame, module.summary, remaining)
+            if status_text and remaining > 0:
+                self._terminal_label_limited(row, f" {status_text}", marker_fg, remaining, bold=True)
             self.workflow_cards[module.id] = row
         self._pack_workflow_cursor()
+        self._schedule_workflow_typing(modules)
 
     def _terminal_label(self, parent: Frame, text: str, fg: str, bold: bool = False) -> Label:
         label = Label(
@@ -1540,13 +1556,48 @@ class ImageConverterApp:
         label.pack(side="left")
         return label
 
+    def _terminal_label_limited(
+        self,
+        parent: Frame,
+        text: str,
+        fg: str,
+        remaining: int,
+        bold: bool = False,
+        return_label: bool = False,
+    ):
+        if remaining <= 0:
+            return (None, 0) if return_label else 0
+        shown = text[:remaining]
+        label = self._terminal_label(parent, shown, fg, bold=bold) if shown else None
+        next_remaining = max(0, remaining - len(shown))
+        return (label, next_remaining) if return_label else next_remaining
+
+    def _schedule_workflow_typing(self, modules: list[WorkflowModule]) -> None:
+        active = False
+        for index, module in enumerate(modules, start=1):
+            status_text = self._workflow_status_text(module.id, self._workflow_status_for_module(module))
+            total_len = len(f"{index:02d}> {module.name} | {module.summary} {status_text}")
+            limit = self.workflow_typing_limits.get(module.id)
+            if limit is not None and limit < total_len:
+                self.workflow_typing_limits[module.id] = min(total_len, limit + 2)
+                active = True
+            elif limit is not None:
+                self.workflow_typing_limits.pop(module.id, None)
+        if active:
+            if self.workflow_typing_after_id:
+                self.root.after_cancel(self.workflow_typing_after_id)
+            self.workflow_typing_after_id = self.root.after(35, self._render_workflow_cards)
+        else:
+            self.workflow_typing_after_id = None
+
     def _pack_workflow_cursor(self) -> None:
         row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg="#050505", padx=6, pady=0)
         row.pack(fill="x")
         self._terminal_label(row, "C:\\workflow> ", "#22c55e", bold=True)
         self.workflow_cursor_text_label = self._terminal_label(row, self.workflow_cursor_status, "#38bdf8", bold=True)
-        self._terminal_label(row, " ", "#050505")
-        self.workflow_cursor_label = self._terminal_label(row, "█", "#22c55e", bold=True)
+        if self.workflow_cursor_status.startswith("idle"):
+            self._terminal_label(row, " ", "#050505")
+            self.workflow_cursor_label = self._terminal_label(row, "█", "#22c55e", bold=True)
 
     def _blink_workflow_cursor(self) -> None:
         self.workflow_cursor_on = not self.workflow_cursor_on
@@ -1564,17 +1615,26 @@ class ImageConverterApp:
         try:
             if label is not None and label.winfo_exists():
                 label.config(text=text)
+            cursor = getattr(self, "workflow_cursor_label", None)
+            if cursor is not None and cursor.winfo_exists() and not text.startswith("idle"):
+                cursor.config(text="", fg="#050505")
         except TclError:
             pass
 
-    def _pack_terminal_summary(self, parent: Frame, text: str) -> None:
+    def _pack_terminal_summary(self, parent: Frame, text: str, remaining: int | None = None) -> int:
         pattern = re.compile(r"(JPG质量\d+%|质量\d+%|目标\d+KB|JPG|PNG|WEBP|BMP|TIFF|HEIC|HEIF|\d+x\d+|\d+%|#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})|\d+KB)")
         parts = pattern.split(text)
+        chars_left = len(text) if remaining is None else remaining
         for part in parts:
             if not part:
                 continue
+            if chars_left <= 0:
+                break
             is_value = bool(pattern.fullmatch(part))
-            self._terminal_label(parent, part, "#facc15" if is_value else "#cbd5e1", bold=is_value)
+            shown = part[:chars_left]
+            self._terminal_label(parent, shown, "#facc15" if is_value else "#cbd5e1", bold=is_value)
+            chars_left -= len(shown)
+        return max(0, chars_left)
 
     def _workflow_status_text(self, module_id: str, status: str) -> str:
         if status == "running":
