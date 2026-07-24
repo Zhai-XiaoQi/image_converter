@@ -526,8 +526,9 @@ class ImageConverterApp:
         left_col = Frame(body)
         left_col.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
-        settings_shell = LabelFrame(body, text="自动化工作流", font=module_font, width=560)
+        settings_shell = LabelFrame(body, text="自动化工作流", font=module_font, width=500)
         settings_shell.pack(side="right", fill="both", anchor="n")
+        settings_shell.pack_propagate(False)
         opts = Frame(settings_shell)
         opts.pack(fill="both", expand=True, padx=8, pady=8)
 
@@ -595,7 +596,7 @@ class ImageConverterApp:
         self.tree.bind("<Motion>", self._on_tree_motion)
         self.tree.bind("<Leave>", self._on_tree_leave)
         self.tree.tag_configure("hover", background="#eef6ff")
-        panes.add(tree_outer, minsize=390)
+        panes.add(tree_outer, minsize=320)
 
         grid_outer = Frame(panes)
         self.grid_canvas = Canvas(grid_outer, highlightthickness=0)
@@ -609,7 +610,7 @@ class ImageConverterApp:
         self.grid_canvas.bind("<Configure>", self._on_canvas_configure)
         self.grid_canvas.bind("<MouseWheel>", self._on_grid_mousewheel)
         self.grid_inner.bind("<MouseWheel>", self._on_grid_mousewheel)
-        panes.add(grid_outer, minsize=760)
+        panes.add(grid_outer, minsize=620)
 
         workflow_box = LabelFrame(opts, text="当前处理流程", font=section_font)
         workflow_box.pack(fill="x", pady=(0, 6))
@@ -749,36 +750,34 @@ class ImageConverterApp:
 
         _rename_panel, rename_box = self._make_collapsible_panel(self.parameter_inner, "批量重命名", self.rename_enabled, lambda: (self._update_control_states(), self.scan_jobs()), "rename")
         self.rename_controls: list[object] = []
-        rename_row = Frame(rename_box)
-        rename_row.pack(fill="x", padx=8, pady=(5, 2))
-        Label(rename_row, text="模板").pack(side="left")
-        self.rename_template_entry = Entry(rename_row, textvariable=self.rename_template, width=24)
-        self.rename_template_entry.pack(side="left", padx=(4, 8))
-        self.rename_hint = Label(rename_row, text="可用：{name} {parent} {index} {index2} {index3} {date}", fg="#666")
-        self.rename_hint.pack(side="left")
-        rename_affix_row = Frame(rename_box)
-        rename_affix_row.pack(fill="x", padx=8, pady=(2, 2))
-        Label(rename_affix_row, text="前缀").pack(side="left")
-        self.rename_prefix_entry = Entry(rename_affix_row, textvariable=self.rename_prefix, width=12)
-        self.rename_prefix_entry.pack(side="left", padx=(4, 12))
-        Label(rename_affix_row, text="后缀").pack(side="left")
-        self.rename_suffix_entry = Entry(rename_affix_row, textvariable=self.rename_suffix, width=12)
-        self.rename_suffix_entry.pack(side="left", padx=(4, 12))
-        Label(rename_affix_row, text="起始序号").pack(side="left")
-        self.rename_start_spin = ttk.Spinbox(rename_affix_row, from_=0, to=99999, textvariable=self.rename_start, width=7)
-        self.rename_start_spin.pack(side="left", padx=(4, 0))
-        rename_replace_row = Frame(rename_box)
-        rename_replace_row.pack(fill="x", padx=8, pady=(2, 5))
-        Label(rename_replace_row, text="替换").pack(side="left")
-        self.rename_find_entry = Entry(rename_replace_row, textvariable=self.rename_find, width=18)
-        self.rename_find_entry.pack(side="left", padx=(4, 8))
-        Label(rename_replace_row, text="为").pack(side="left")
-        self.rename_replace_entry = Entry(rename_replace_row, textvariable=self.rename_replace, width=18)
-        self.rename_replace_entry.pack(side="left", padx=(4, 8))
-        self.rename_rules_button = Button(rename_replace_row, text="更多替换...", command=self.open_rename_rules_editor, width=12)
-        self.rename_rules_button.pack(side="left", padx=(4, 8))
-        self.rename_rules_label = Label(rename_replace_row, textvariable=self.rename_rules_summary, fg="#0b5cad")
-        self.rename_rules_label.pack(side="left")
+        rename_form = Frame(rename_box)
+        rename_form.pack(fill="x", padx=8, pady=(6, 5))
+        rename_form.grid_columnconfigure(1, weight=1)
+        rename_form.grid_columnconfigure(3, weight=1)
+        Label(rename_form, text="模板").grid(row=0, column=0, sticky="w", padx=(0, 4), pady=(0, 3))
+        self.rename_template_entry = Entry(rename_form, textvariable=self.rename_template)
+        self.rename_template_entry.grid(row=0, column=1, columnspan=3, sticky="ew", pady=(0, 3))
+        self.rename_hint = Label(rename_form, text="可用：{name} {parent} {index} {index2} {index3} {date}", fg="#666", anchor="w")
+        self.rename_hint.grid(row=1, column=1, columnspan=3, sticky="ew", pady=(0, 4))
+        Label(rename_form, text="前缀").grid(row=2, column=0, sticky="w", padx=(0, 4), pady=2)
+        self.rename_prefix_entry = Entry(rename_form, textvariable=self.rename_prefix)
+        self.rename_prefix_entry.grid(row=2, column=1, sticky="ew", padx=(0, 10), pady=2)
+        Label(rename_form, text="后缀").grid(row=2, column=2, sticky="w", padx=(0, 4), pady=2)
+        self.rename_suffix_entry = Entry(rename_form, textvariable=self.rename_suffix)
+        self.rename_suffix_entry.grid(row=2, column=3, sticky="ew", pady=2)
+        Label(rename_form, text="起始序号").grid(row=3, column=0, sticky="w", padx=(0, 4), pady=2)
+        self.rename_start_spin = ttk.Spinbox(rename_form, from_=0, to=99999, textvariable=self.rename_start, width=8)
+        self.rename_start_spin.grid(row=3, column=1, sticky="w", padx=(0, 10), pady=2)
+        self.rename_rules_button = Button(rename_form, text="更多替换...", command=self.open_rename_rules_editor, width=12)
+        self.rename_rules_button.grid(row=3, column=2, sticky="w", padx=(0, 6), pady=2)
+        self.rename_rules_label = Label(rename_form, textvariable=self.rename_rules_summary, fg="#0b5cad", anchor="w")
+        self.rename_rules_label.grid(row=3, column=3, sticky="ew", pady=2)
+        Label(rename_form, text="替换").grid(row=4, column=0, sticky="w", padx=(0, 4), pady=(2, 0))
+        self.rename_find_entry = Entry(rename_form, textvariable=self.rename_find)
+        self.rename_find_entry.grid(row=4, column=1, sticky="ew", padx=(0, 10), pady=(2, 0))
+        Label(rename_form, text="为").grid(row=4, column=2, sticky="w", padx=(0, 4), pady=(2, 0))
+        self.rename_replace_entry = Entry(rename_form, textvariable=self.rename_replace)
+        self.rename_replace_entry.grid(row=4, column=3, sticky="ew", pady=(2, 0))
         self.rename_controls.extend([
             self.rename_template_entry, self.rename_hint, self.rename_prefix_entry, self.rename_suffix_entry,
             self.rename_start_spin, self.rename_find_entry, self.rename_replace_entry,
@@ -928,7 +927,7 @@ class ImageConverterApp:
         self.parameter_toggle_buttons[panel_key].pack(side="left")
         Label(header, text=text, font=("Microsoft YaHei UI", 10, "bold"), bg="#f3f4f6").pack(side="left", padx=(4, 0))
         Checkbutton(header, text="启用", variable=variable, command=command, bg="#f3f4f6", activebackground="#f3f4f6").pack(side="left", padx=(8, 0))
-        Label(header, textvariable=self.parameter_summary_vars[panel_key], fg="#667085", bg="#f3f4f6", font=("Microsoft YaHei UI", 9), width=28, anchor="w").pack(side="left", padx=(10, 0))
+        Label(header, textvariable=self.parameter_summary_vars[panel_key], fg="#667085", bg="#f3f4f6", font=("Microsoft YaHei UI", 9), anchor="w").pack(side="left", fill="x", expand=True, padx=(10, 0))
         body = Frame(panel)
         self.parameter_panels[panel_key] = panel
         self.parameter_panel_bodies[panel_key] = body
@@ -1096,7 +1095,7 @@ class ImageConverterApp:
         try:
             preview_total = self.preview_panes.winfo_width()
             if preview_total > 0:
-                self.preview_panes.sash_place(0, int(preview_total * 0.32), 0)
+                self.preview_panes.sash_place(0, int(preview_total * 0.26), 0)
         except Exception:
             pass
 
@@ -1129,8 +1128,8 @@ class ImageConverterApp:
 
     def _fit_preview_width(self) -> None:
         width = max(360, self.grid_canvas.winfo_width())
-        target_columns = 2 if width >= 560 else 1
-        zoom = int((width / target_columns) / 320 * 100)
+        target_columns = 3 if width >= 780 else (2 if width >= 520 else 1)
+        zoom = int((width / target_columns) / 292 * 100)
         self._set_preview_zoom(zoom)
 
     def _shortcut_save_single(self, _event) -> str | None:
@@ -2053,7 +2052,7 @@ class ImageConverterApp:
 
     def _create_card(self, idx: int, job: ConvertJob) -> None:
         zoom = max(60, min(180, self.preview_zoom.get())) / 100
-        thumb_size = (max(120, int(176 * zoom)), max(86, int(126 * zoom)))
+        thumb_size = (max(132, int(206 * zoom)), max(96, int(148 * zoom)))
         image_size = (thumb_size[0] + 8, thumb_size[1] + 6)
         text_width = max(18, int(25 * zoom))
         var = BooleanVar(value=job.selected)
@@ -2205,9 +2204,9 @@ class ImageConverterApp:
         self.layout_after_id = None
         width = max(360, self.grid_canvas.winfo_width(), self.grid_canvas.winfo_reqwidth())
         zoom = max(60, min(180, self.preview_zoom.get())) / 100
-        card_width = max(220, int(320 * zoom))
+        card_width = max(260, int(292 * zoom))
         columns = max(1, width // card_width)
-        actual_width = max(280, width // columns)
+        actual_width = max(250, width // columns)
         for column in range(max(columns, 12)):
             self.grid_inner.grid_columnconfigure(column, weight=1 if column < columns else 0, minsize=actual_width if column < columns else 0)
         for visible_idx, card in enumerate(self.card_frames.values()):
