@@ -179,7 +179,22 @@ class ImageConverterApp:
         self.tree_nodes: dict[str, dict[str, object]] = {}
         self.card_frames: dict[int, Frame] = {}
         self.card_vars: dict[int, BooleanVar] = {}
+        self.card_image_labels: dict[int, Label] = {}
+        self.grid_visible_indices: list[int] = []
+        self.grid_rendered_indices: set[int] = set()
+        self.grid_columns = 1
+        self.grid_row_height = 250
+        self.grid_actual_width = 280
+        self.grid_total_height = 0
+        self.grid_scroll_after_id: str | None = None
         self.thumb_cache: dict[tuple[str, int, tuple[int, int]], ImageTk.PhotoImage] = {}
+        self.thumb_pil_cache: dict[tuple[str, int, tuple[int, int]], Image.Image] = {}
+        self.thumb_pending: set[tuple[str, int, tuple[int, int]]] = set()
+        self.thumb_queue: queue.Queue[tuple[int, Path, tuple[int, int], tuple[str, int, tuple[int, int]], int]] = queue.Queue()
+        self.thumb_results: queue.Queue[tuple[int, tuple[str, int, tuple[int, int]], Image.Image | None]] = queue.Queue()
+        self.thumb_generation = 0
+        self.thumb_workers_started = False
+        self.placeholder_thumbs: dict[tuple[int, int], ImageTk.PhotoImage] = {}
         self.tree_icons: dict[tuple[str, str], ImageTk.PhotoImage] = {}
         self.selection_state: dict[str, bool] = {}
         self.hover_tree_item: str | None = None
@@ -510,7 +525,7 @@ class ImageConverterApp:
         style = ttk.Style(self.root)
         module_font = ("Microsoft YaHei UI", 12, "bold")
         section_font = ("Microsoft YaHei UI", 10, "bold")
-        style.configure("File.Treeview", font=("Microsoft YaHei UI", 12), rowheight=34)
+        style.configure("File.Treeview", font=("Microsoft YaHei UI", 11), rowheight=28)
         style.configure("File.Treeview.Heading", font=module_font)
         style.configure("TNotebook.Tab", font=("Microsoft YaHei UI", 12, "bold"), padding=(18, 8))
         style.configure("Workflow.Horizontal.TProgressbar", thickness=7)
@@ -591,7 +606,7 @@ class ImageConverterApp:
         Button(tree_toolbar, text="全选", command=lambda: self.set_all_selected(True), width=8).pack(side="left")
         Button(tree_toolbar, text="全不选", command=lambda: self.set_all_selected(False), width=8).pack(side="left", padx=(8, 0))
         self.tree = ttk.Treeview(tree_outer, show="tree", style="File.Treeview")
-        self.tree.column("#0", width=390, stretch=True)
+        self.tree.column("#0", width=280, stretch=True)
         tree_scroll = Scrollbar(tree_outer, command=self.tree.yview)
         self.tree.config(yscrollcommand=tree_scroll.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -601,7 +616,9 @@ class ImageConverterApp:
         self.tree.bind("<Motion>", self._on_tree_motion)
         self.tree.bind("<Leave>", self._on_tree_leave)
         self.tree.tag_configure("hover", background="#eef6ff")
-        panes.add(tree_outer, minsize=320)
+        self.tree.tag_configure("folder", font=("Microsoft YaHei UI", 11, "bold"))
+        self.tree.tag_configure("file", font=("Microsoft YaHei UI", 11))
+        panes.add(tree_outer, minsize=260)
 
         grid_outer = Frame(panes)
         self.grid_canvas = Canvas(grid_outer, highlightthickness=0)
@@ -1119,7 +1136,7 @@ class ImageConverterApp:
         try:
             preview_total = self.preview_panes.winfo_width()
             if preview_total > 0:
-                self.preview_panes.sash_place(0, int(preview_total * 0.26), 0)
+                self.preview_panes.sash_place(0, int(preview_total * 0.22), 0)
         except Exception:
             pass
 
@@ -2018,7 +2035,8 @@ class ImageConverterApp:
         }
         for kind in ("folder", "file"):
             for state, (fill, mark_color) in colors.items():
-                img = Image.new("RGBA", (44, 26), (0, 0, 0, 0))
+                img_width = 44 if kind == "folder" else 24
+                img = Image.new("RGBA", (img_width, 26), (0, 0, 0, 0))
                 draw = ImageDraw.Draw(img)
                 draw.rounded_rectangle((1, 4, 20, 23), radius=2, fill=fill, outline="#555555", width=1)
                 if state == "checked":
@@ -2028,10 +2046,6 @@ class ImageConverterApp:
                 if kind == "folder":
                     draw.rectangle((25, 9, 42, 22), fill="#f2c14e", outline="#9b771f")
                     draw.rectangle((23, 7, 34, 13), fill="#f2c14e", outline="#9b771f")
-                else:
-                    draw.rectangle((25, 4, 42, 23), fill="#f7fbff", outline="#5c85b1")
-                    draw.rectangle((28, 16, 33, 20), fill="#71a85f")
-                    draw.polygon([(34, 20), (39, 12), (42, 20)], fill="#5d8ec1")
                 self.tree_icons[(kind, state)] = ImageTk.PhotoImage(img)
 
     def _display_source_rel(self, source: Path) -> Path:
@@ -2042,6 +2056,13 @@ class ImageConverterApp:
 
     def _populate_tree(self) -> None:
         node_map: dict[Path, str] = {}
+        folder_counts: dict[Path, int] = {}
+        for job in self.jobs:
+            rel = self._display_source_rel(job.source)
+            cumulative = Path()
+            for part in rel.parts[:-1]:
+                cumulative = cumulative / part
+                folder_counts[cumulative] = folder_counts.get(cumulative, 0) + 1
         for idx, job in enumerate(self.jobs):
             rel = self._display_source_rel(job.source)
             parent_id = ""
@@ -2049,19 +2070,21 @@ class ImageConverterApp:
             for part in rel.parts[:-1]:
                 cumulative = cumulative / part
                 if cumulative not in node_map:
-                    node_id = self.tree.insert(parent_id, "end", text=part, image=self.tree_icons[("folder", "checked")], open=True)
+                    count = folder_counts.get(cumulative, 0)
+                    label = f"{part} ({count})" if count else part
+                    node_id = self.tree.insert(parent_id, "end", text=label, image=self.tree_icons[("folder", "checked")], open=True, tags=("folder",))
                     node_map[cumulative] = node_id
                     self.tree_nodes[node_id] = {"kind": "folder", "name": part}
                 parent_id = node_map[cumulative]
-            job.tree_id = self.tree.insert(parent_id, "end", text=rel.name, image=self.tree_icons[("file", "checked" if job.selected else "unchecked")])
+            job.tree_id = self.tree.insert(parent_id, "end", text=rel.name, image=self.tree_icons[("file", "checked" if job.selected else "unchecked")], tags=("file",))
             self.tree_nodes[job.tree_id] = {"kind": "file", "job_index": idx, "name": rel.name}
         self._refresh_folder_states()
 
     def _populate_grid(self) -> None:
         self._clear_grid()
-        for idx, job in enumerate(self.jobs):
-            if job.selected:
-                self._create_card(idx, job)
+        self.grid_visible_indices = [idx for idx, job in enumerate(self.jobs) if job.selected]
+        self.thumb_generation += 1
+        self._ensure_thumb_workers()
         self.root.update_idletasks()
         self._layout_cards(reset_scroll=True)
 
@@ -2070,6 +2093,10 @@ class ImageConverterApp:
             child.destroy()
         self.card_frames.clear()
         self.card_vars.clear()
+        self.card_image_labels.clear()
+        self.grid_visible_indices.clear()
+        self.grid_rendered_indices.clear()
+        self.grid_total_height = 0
         self.grid_canvas.yview_moveto(0)
         self.grid_canvas.xview_moveto(0)
         self.grid_canvas.configure(scrollregion=(0, 0, 0, 0))
@@ -2089,9 +2116,10 @@ class ImageConverterApp:
         Button(top, text="编辑", command=lambda i=idx: self.load_single_image(self.jobs[i].source), width=6).pack(side="right")
         badge_text, badge_fg = self._job_status_badge(job)
         Label(top, text=badge_text, fg=badge_fg, bg="#f5f5f5", font=("Microsoft YaHei UI", 11, "bold")).pack(side="right", padx=(0, 8))
-        thumb = self._get_thumbnail(job.source, thumb_size)
+        thumb = self._get_thumbnail(job.source, thumb_size, idx)
         image_label = Label(card, image=thumb, width=image_size[0], height=image_size[1], bg="#f7f7f4")
         image_label.image = thumb  # type: ignore[attr-defined]
+        self.card_image_labels[idx] = image_label
         image_label.pack(fill="x", pady=(4, 0))
         rel = self._display_source_rel(job.source)
         name_label = Label(card, text=rel.name, width=text_width, anchor="center", bg="#f5f5f5")
@@ -2191,7 +2219,7 @@ class ImageConverterApp:
             self.load_single_image(self.jobs[job_index].source)
         return "break"
 
-    def _get_thumbnail(self, path: Path, size: tuple[int, int]) -> ImageTk.PhotoImage:
+    def _get_thumbnail(self, path: Path, size: tuple[int, int], job_index: int | None = None) -> ImageTk.PhotoImage:
         try:
             mtime = path.stat().st_mtime_ns
         except OSError:
@@ -2200,6 +2228,15 @@ class ImageConverterApp:
         cached = self.thumb_cache.get(key)
         if cached:
             return cached
+        if job_index is not None:
+            pil_cached = self.thumb_pil_cache.get(key)
+            if pil_cached is not None:
+                return self._store_thumbnail_photo(key, pil_cached)
+            if key not in self.thumb_pending:
+                self.thumb_pending.add(key)
+                self.thumb_queue.put((self.thumb_generation, path, size, key, job_index))
+                self.root.after(40, self._drain_thumbnail_results)
+            return self._placeholder_thumbnail(size)
         canvas = Image.new("RGB", size, (247, 247, 244))
         try:
             if path.suffix.lower() in {".heic", ".heif"} and not HEIC_ENABLED:
@@ -2219,10 +2256,79 @@ class ImageConverterApp:
                 self.thumb_cache.pop(old_key, None)
         return photo
 
+    def _placeholder_thumbnail(self, size: tuple[int, int]) -> ImageTk.PhotoImage:
+        cached = self.placeholder_thumbs.get(size)
+        if cached:
+            return cached
+        canvas = Image.new("RGB", size, (247, 247, 244))
+        draw = ImageDraw.Draw(canvas)
+        draw.rectangle((8, 8, size[0] - 8, size[1] - 8), outline="#d0d5dd", width=1)
+        draw.text((max(12, size[0] // 2 - 28), max(12, size[1] // 2 - 8)), "loading", fill="#98a2b3")
+        photo = ImageTk.PhotoImage(canvas)
+        self.placeholder_thumbs[size] = photo
+        return photo
+
+    def _store_thumbnail_photo(self, key: tuple[str, int, tuple[int, int]], image: Image.Image) -> ImageTk.PhotoImage:
+        photo = ImageTk.PhotoImage(image)
+        self.thumb_cache[key] = photo
+        if len(self.thumb_cache) > 500:
+            for old_key in list(self.thumb_cache.keys())[:120]:
+                self.thumb_cache.pop(old_key, None)
+        return photo
+
+    @staticmethod
+    def _build_thumbnail_image(path: Path, size: tuple[int, int]) -> Image.Image:
+        canvas = Image.new("RGB", size, (247, 247, 244))
+        try:
+            if path.suffix.lower() in {".heic", ".heif"} and not HEIC_ENABLED:
+                raise ValueError("HEIC not enabled")
+            with Image.open(path) as im:
+                im = im.convert("RGB")
+                im.thumbnail(size, Image.Resampling.LANCZOS)
+                canvas.paste(im, ((size[0] - im.width) // 2, (size[1] - im.height) // 2))
+        except Exception:
+            draw = ImageDraw.Draw(canvas)
+            draw.rectangle((10, 10, size[0] - 10, size[1] - 10), outline="#b42318", width=2)
+            draw.text((18, size[1] // 2 - 8), "preview error", fill="#b42318")
+        return canvas
+
+    def _ensure_thumb_workers(self) -> None:
+        if self.thumb_workers_started:
+            return
+        self.thumb_workers_started = True
+        for _ in range(3):
+            threading.Thread(target=self._thumbnail_worker, daemon=True).start()
+
+    def _thumbnail_worker(self) -> None:
+        while True:
+            generation, path, size, key, job_index = self.thumb_queue.get()
+            image = None if generation != self.thumb_generation else self._build_thumbnail_image(path, size)
+            self.thumb_results.put((job_index, key, image))
+
+    def _drain_thumbnail_results(self) -> None:
+        drained = 0
+        while drained < 24:
+            try:
+                job_index, key, image = self.thumb_results.get_nowait()
+            except queue.Empty:
+                break
+            drained += 1
+            self.thumb_pending.discard(key)
+            if image is None:
+                continue
+            self.thumb_pil_cache[key] = image
+            photo = self._store_thumbnail_photo(key, image)
+            label = self.card_image_labels.get(job_index)
+            if label and label.winfo_exists():
+                label.configure(image=photo)
+                label.image = photo  # type: ignore[attr-defined]
+        if not self.thumb_results.empty():
+            self.root.after(40, self._drain_thumbnail_results)
+
     def _schedule_layout(self) -> None:
         if self.layout_after_id:
             self.root.after_cancel(self.layout_after_id)
-        self.layout_after_id = self.root.after(80, self._layout_cards)
+        self.layout_after_id = self.root.after(50, self._layout_cards)
 
     def _layout_cards(self, reset_scroll: bool = False) -> None:
         self.layout_after_id = None
@@ -2231,15 +2337,54 @@ class ImageConverterApp:
         card_width = max(260, int(292 * zoom))
         columns = max(1, width // card_width)
         actual_width = max(250, width // columns)
+        row_height = max(220, int(252 * zoom))
+        total_items = len(self.grid_visible_indices)
+        total_rows = (total_items + columns - 1) // columns if total_items else 0
+        total_height = max(1, total_rows * row_height)
+        if columns != self.grid_columns or row_height != self.grid_row_height or actual_width != self.grid_actual_width:
+            for frame in self.card_frames.values():
+                frame.destroy()
+            self.card_frames.clear()
+            self.card_vars.clear()
+            self.card_image_labels.clear()
+            self.grid_rendered_indices.clear()
+        self.grid_columns = columns
+        self.grid_row_height = row_height
+        self.grid_actual_width = actual_width
+        self.grid_total_height = total_height
+        self.grid_canvas.configure(scrollregion=(0, 0, width, total_height))
+        if reset_scroll:
+            self.grid_canvas.yview_moveto(0)
         for column in range(max(columns, 12)):
             self.grid_inner.grid_columnconfigure(column, weight=1 if column < columns else 0, minsize=actual_width if column < columns else 0)
-        for visible_idx, card in enumerate(self.card_frames.values()):
+        top_fraction, bottom_fraction = self.grid_canvas.yview()
+        y0 = top_fraction * total_height
+        y1 = bottom_fraction * total_height
+        start_row = max(0, int(y0 // row_height) - 1)
+        end_row = min(total_rows, int(y1 // row_height) + 3)
+        start_item = start_row * columns
+        end_item = min(total_items, end_row * columns)
+        wanted = set(self.grid_visible_indices[start_item:end_item])
+        for idx in list(self.grid_rendered_indices - wanted):
+            frame = self.card_frames.pop(idx, None)
+            if frame:
+                frame.destroy()
+            self.card_vars.pop(idx, None)
+            self.card_image_labels.pop(idx, None)
+            self.grid_rendered_indices.discard(idx)
+        for idx in wanted - self.grid_rendered_indices:
+            self._create_card(idx, self.jobs[idx])
+            self.grid_rendered_indices.add(idx)
+        self.grid_canvas.coords(self.grid_window, 0, start_row * row_height)
+        visible_map = {idx: pos for pos, idx in enumerate(self.grid_visible_indices)}
+        for idx in sorted(self.grid_rendered_indices, key=lambda item: visible_map.get(item, 0)):
+            card = self.card_frames.get(idx)
+            if not card:
+                continue
+            visible_idx = visible_map[idx] - start_item
             card.grid_forget()
             card.grid(row=visible_idx // columns, column=visible_idx % columns, padx=0, pady=0, sticky="nsew")
         self.grid_inner.update_idletasks()
-        self.grid_canvas.configure(scrollregion=self.grid_canvas.bbox("all"))
-        if reset_scroll:
-            self.grid_canvas.yview_moveto(0)
 
     @staticmethod
     def _folder_text(name: str, state: str) -> str:
@@ -2273,9 +2418,15 @@ class ImageConverterApp:
             return
         node = self.tree_nodes.get(selected[0])
         if node and node["kind"] == "file":
-            card = self.card_frames.get(int(node["job_index"]))
+            job_index = int(node["job_index"])
+            card = self.card_frames.get(job_index)
             if card:
                 self.grid_canvas.yview_moveto(max(0, card.winfo_y() / max(1, self.grid_inner.winfo_height())))
+            elif job_index in self.grid_visible_indices and self.grid_total_height:
+                visible_idx = self.grid_visible_indices.index(job_index)
+                target_y = (visible_idx // max(1, self.grid_columns)) * self.grid_row_height
+                self.grid_canvas.yview_moveto(max(0.0, min(1.0, target_y / max(1, self.grid_total_height))))
+                self._schedule_layout()
 
     def _on_tree_motion(self, event) -> None:
         item = self.tree.identify_row(event.y)
@@ -2385,7 +2536,8 @@ class ImageConverterApp:
         ])
 
     def _on_grid_configure(self, _event) -> None:
-        self.grid_canvas.configure(scrollregion=self.grid_canvas.bbox("all"))
+        if self.grid_total_height:
+            self.grid_canvas.configure(scrollregion=(0, 0, self.grid_canvas.winfo_width(), self.grid_total_height))
 
     def _on_canvas_configure(self, event) -> None:
         self.grid_canvas.itemconfigure(self.grid_window, width=event.width)
@@ -2394,6 +2546,9 @@ class ImageConverterApp:
     def _on_grid_mousewheel(self, event) -> str:
         step = -1 if event.delta > 0 else 1
         self.grid_canvas.yview_scroll(step * 3, "units")
+        if self.grid_scroll_after_id:
+            self.root.after_cancel(self.grid_scroll_after_id)
+        self.grid_scroll_after_id = self.root.after(16, self._layout_cards)
         return "break"
 
     def _processing_steps_for_job(self, job: ConvertJob) -> list[ProcessingStep]:
@@ -3173,7 +3328,14 @@ class ImageConverterApp:
 
     def _refresh_grid_status_batch(self) -> None:
         self.grid_status_refresh_after_id = None
-        self._populate_grid()
+        for idx in list(self.grid_rendered_indices):
+            frame = self.card_frames.pop(idx, None)
+            if frame:
+                frame.destroy()
+            self.card_vars.pop(idx, None)
+            self.card_image_labels.pop(idx, None)
+        self.grid_rendered_indices.clear()
+        self._layout_cards()
 
     def _drain_events(self) -> None:
         try:
