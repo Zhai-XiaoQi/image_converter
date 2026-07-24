@@ -526,7 +526,7 @@ class ImageConverterApp:
         left_col = Frame(body)
         left_col.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
-        settings_shell = LabelFrame(body, text="自动化工作流", font=module_font, width=500)
+        settings_shell = LabelFrame(body, text="批处理", font=module_font, width=500)
         settings_shell.pack(side="right", fill="both", anchor="n")
         settings_shell.pack_propagate(False)
         opts = Frame(settings_shell)
@@ -863,6 +863,20 @@ class ImageConverterApp:
         Checkbutton(danger_row, text="覆盖已存在文件", variable=self.overwrite, fg="#9a6400").pack(side="left")
         Checkbutton(danger_row, text="成功后删除原图", variable=self.delete_originals, fg="#b42318", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(20, 0))
 
+        action_bar = Frame(opts)
+        action_bar.pack(fill="x", pady=(2, 0))
+        self.start_button = Button(
+            action_bar,
+            text="开始转换",
+            command=self.start_convert,
+            bg="#0b5cad",
+            fg="white",
+            activebackground="#084a8d",
+            activeforeground="white",
+            font=("Microsoft YaHei UI", 12, "bold"),
+        )
+        self.start_button.pack(fill="x", ipady=9)
+
         for var in (self.rename_template, self.rename_prefix, self.rename_suffix, self.rename_find, self.rename_replace, self.target_size):
             var.trace_add("write", lambda *_args: self._schedule_scan())
         for var in (self.rename_start, self.resize_width, self.resize_height, self.resize_scale_percent):
@@ -893,18 +907,6 @@ class ImageConverterApp:
         self._set_status_message("请选择图片或文件夹。")
 
         self.progress = self.workflow_progress
-        self.start_button = Button(
-            status_content,
-            text="开始转换",
-            command=self.start_convert,
-            width=18,
-            bg="#0b5cad",
-            fg="white",
-            activebackground="#084a8d",
-            activeforeground="white",
-            font=("Microsoft YaHei UI", 10, "bold"),
-        )
-        self.start_button.pack(side="right", fill="y", padx=(10, 0), pady=(1, 1))
         for drop_widget in (preview, self.tree, self.grid_canvas):
             self._enable_batch_drop(drop_widget)
         self._build_single_editor_tab(module_font)
