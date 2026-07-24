@@ -513,7 +513,9 @@ class ImageConverterApp:
         style.configure("File.Treeview", font=("Microsoft YaHei UI", 12), rowheight=34)
         style.configure("File.Treeview.Heading", font=module_font)
         style.configure("TNotebook.Tab", font=("Microsoft YaHei UI", 12, "bold"), padding=(18, 8))
+        style.configure("Workflow.Horizontal.TProgressbar", thickness=7)
         style.map("File.Treeview", background=[("selected", "#dcecff")])
+        panel_bg = "#f3f4f6"
 
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True)
@@ -529,14 +531,17 @@ class ImageConverterApp:
         settings_shell = LabelFrame(body, text="批处理", font=module_font, width=500)
         settings_shell.pack(side="right", fill="both", anchor="n")
         settings_shell.pack_propagate(False)
-        opts = Frame(settings_shell)
+        opts = Frame(settings_shell, bg=panel_bg)
         opts.pack(fill="both", expand=True, padx=8, pady=8)
 
         top_area = Frame(left_col)
         top_area.pack(fill="x", pady=(0, 8))
+        top_area.grid_columnconfigure(0, weight=1, uniform="io")
+        top_area.grid_columnconfigure(1, weight=1, uniform="io")
+        top_area.grid_rowconfigure(0, weight=1)
 
         top = LabelFrame(top_area, text="输入", font=module_font)
-        top.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        top.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         mode_row = Frame(top)
         mode_row.pack(fill="x", padx=10, pady=(5, 1))
         Button(mode_row, text="选择文件夹", command=self.choose_folder_input, width=14).pack(side="left")
@@ -550,7 +555,7 @@ class ImageConverterApp:
         Entry(input_row, textvariable=self.input_text).pack(side="left", fill="x", expand=True)
 
         out = LabelFrame(top_area, text="输出", font=module_font)
-        out.pack(side="left", fill="x", expand=True)
+        out.grid(row=0, column=1, sticky="nsew")
         out_row = Frame(out)
         out_row.pack(fill="x", padx=10, pady=(17, 5))
         Entry(out_row, textvariable=self.output_text).pack(side="left", fill="x", expand=True)
@@ -612,12 +617,12 @@ class ImageConverterApp:
         self.grid_inner.bind("<MouseWheel>", self._on_grid_mousewheel)
         panes.add(grid_outer, minsize=620)
 
-        workflow_box = LabelFrame(opts, text="当前处理流程", font=section_font, bd=0, relief="flat")
+        workflow_box = LabelFrame(opts, text="当前处理流程", font=section_font, bd=0, relief="flat", bg=panel_bg)
         workflow_box.pack(fill="x", pady=(0, 6))
-        workflow_list = Frame(workflow_box, height=82)
+        workflow_list = Frame(workflow_box, height=96, bg=panel_bg)
         workflow_list.pack(fill="x", padx=8, pady=(5, 1))
         workflow_list.pack_propagate(False)
-        self.workflow_canvas = Canvas(workflow_list, highlightthickness=0, height=78, bg="#050505")
+        self.workflow_canvas = Canvas(workflow_list, highlightthickness=0, height=92, bg="#050505")
         workflow_scroll = Scrollbar(workflow_list, orient="vertical", command=self.workflow_canvas.yview)
         self.workflow_canvas.config(yscrollcommand=workflow_scroll.set)
         self.workflow_canvas.pack(side="left", fill="both", expand=True)
@@ -628,7 +633,7 @@ class ImageConverterApp:
         self.workflow_canvas.bind("<Configure>", self._on_workflow_canvas_configure)
         self.workflow_canvas.bind("<MouseWheel>", self._on_workflow_mousewheel)
         self.workflow_cards_frame.bind("<MouseWheel>", self._on_workflow_mousewheel)
-        self.workflow_progress = ttk.Progressbar(workflow_box, mode="determinate")
+        self.workflow_progress = ttk.Progressbar(workflow_box, mode="determinate", style="Workflow.Horizontal.TProgressbar")
         self.workflow_progress.pack(fill="x", padx=(8, 24), pady=(1, 0))
         Label(
             workflow_box,
@@ -638,26 +643,26 @@ class ImageConverterApp:
             font=("Microsoft YaHei UI", 9, "bold"),
         ).pack(fill="x", padx=10, pady=(2, 5))
 
-        preset_box = LabelFrame(opts, text="处理预设", font=section_font, bd=0, relief="flat")
+        preset_box = LabelFrame(opts, text="处理预设", font=section_font, bd=0, relief="flat", bg=panel_bg)
         preset_box.pack(fill="x", pady=(0, 6))
-        preset_row = Frame(preset_box)
+        preset_row = Frame(preset_box, bg=panel_bg)
         preset_row.pack(fill="x", padx=10, pady=7)
         self.preset_combo = ttk.Combobox(preset_row, textvariable=self.preset_name, values=self._preset_names(), width=26, state="readonly")
         self.preset_combo.pack(side="left", fill="x", expand=True)
         self.preset_combo.bind("<<ComboboxSelected>>", lambda _e: self.apply_preset(self.preset_name.get()))
         Button(preset_row, text="保存", command=self.save_current_preset, width=7).pack(side="left", padx=(8, 0))
         Button(preset_row, text="另存为", command=self.save_preset_as, width=7).pack(side="left", padx=(6, 0))
-        Label(preset_box, textvariable=self.preset_summary, fg="#0b5cad", anchor="w", wraplength=500).pack(fill="x", padx=10, pady=(0, 7))
+        Label(preset_box, textvariable=self.preset_summary, fg="#0b5cad", bg=panel_bg, anchor="w", wraplength=500).pack(fill="x", padx=10, pady=(0, 7))
 
-        parameter_box = LabelFrame(opts, text="参数配置", font=section_font, bd=0, relief="flat")
+        parameter_box = LabelFrame(opts, text="参数配置", font=section_font, bd=0, relief="flat", bg=panel_bg)
         parameter_box.pack(fill="both", expand=True, pady=(0, 6))
-        parameter_canvas = Canvas(parameter_box, highlightthickness=0)
+        parameter_canvas = Canvas(parameter_box, highlightthickness=0, bg=panel_bg)
         self.parameter_canvas = parameter_canvas
         parameter_scroll = Scrollbar(parameter_box, orient="vertical", command=parameter_canvas.yview)
         parameter_canvas.config(yscrollcommand=parameter_scroll.set)
         parameter_canvas.pack(side="left", fill="both", expand=True, padx=(0, 0), pady=6)
         parameter_scroll.pack(side="right", fill="y", pady=6)
-        self.parameter_inner = Frame(parameter_canvas)
+        self.parameter_inner = Frame(parameter_canvas, bg=panel_bg)
         self.parameter_window = parameter_canvas.create_window((0, 0), window=self.parameter_inner, anchor="nw")
         self.parameter_inner.bind("<Configure>", self._on_parameter_inner_configure)
         parameter_canvas.bind("<Configure>", self._on_parameter_canvas_configure)
@@ -856,28 +861,17 @@ class ImageConverterApp:
         ])
         self.watermark_logo_controls.append(self.watermark_logo_button)
 
-        danger_box = LabelFrame(self.parameter_inner, text="危险操作", font=section_font, bd=0, relief="flat")
+        danger_box = LabelFrame(self.parameter_inner, text="危险操作", font=section_font, bd=0, relief="flat", bg=panel_bg)
         danger_box.pack(fill="x", pady=(6, 0))
-        danger_row = Frame(danger_box)
+        danger_row = Frame(danger_box, bg=panel_bg)
         danger_row.pack(fill="x", padx=8, pady=5)
-        Checkbutton(danger_row, text="覆盖已存在文件", variable=self.overwrite, fg="#9a6400").pack(side="left")
-        Checkbutton(danger_row, text="成功后删除原图", variable=self.delete_originals, fg="#b42318", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(20, 0))
+        Checkbutton(danger_row, text="覆盖已存在文件", variable=self.overwrite, fg="#9a6400", bg=panel_bg, activebackground=panel_bg).pack(side="left")
+        Checkbutton(danger_row, text="成功后删除原图", variable=self.delete_originals, fg="#b42318", bg=panel_bg, activebackground=panel_bg, font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(20, 0))
 
-        action_bar = Frame(opts)
+        action_bar = Frame(opts, bg=panel_bg)
         action_bar.pack(fill="x", pady=(4, 0))
-        action_bar.grid_columnconfigure(0, weight=1, uniform="batch_actions")
-        action_bar.grid_columnconfigure(1, weight=1, uniform="batch_actions")
-        self.open_result_button = Button(
-            action_bar,
-            text="打开结果",
-            command=self.open_output_dir,
-            bg="#f3f4f6",
-            fg="#111827",
-            activebackground="#e5e7eb",
-            activeforeground="#111827",
-            font=("Microsoft YaHei UI", 11, "bold"),
-        )
-        self.open_result_button.grid(row=0, column=0, sticky="ew", padx=(0, 6), ipady=5)
+        action_bar.grid_columnconfigure(0, weight=7, uniform="batch_actions")
+        action_bar.grid_columnconfigure(1, weight=3, uniform="batch_actions")
         self.start_button = Button(
             action_bar,
             text="开始转换",
@@ -886,9 +880,24 @@ class ImageConverterApp:
             fg="white",
             activebackground="#084a8d",
             activeforeground="white",
+            relief="flat",
+            bd=0,
             font=("Microsoft YaHei UI", 11, "bold"),
         )
-        self.start_button.grid(row=0, column=1, sticky="ew", padx=(6, 0), ipady=5)
+        self.start_button.grid(row=0, column=0, sticky="ew", padx=(0, 6), ipady=5)
+        self.open_result_button = Button(
+            action_bar,
+            text="打开结果",
+            command=self.open_output_dir,
+            bg="#e5e7eb",
+            fg="#111827",
+            activebackground="#d1d5db",
+            activeforeground="#111827",
+            relief="flat",
+            bd=0,
+            font=("Microsoft YaHei UI", 11, "bold"),
+        )
+        self.open_result_button.grid(row=0, column=1, sticky="ew", padx=(6, 0), ipady=5)
 
         for var in (self.rename_template, self.rename_prefix, self.rename_suffix, self.rename_find, self.rename_replace, self.target_size):
             var.trace_add("write", lambda *_args: self._schedule_scan())
@@ -943,7 +952,7 @@ class ImageConverterApp:
         Label(header, text=text, font=("Microsoft YaHei UI", 10, "bold"), bg="#f3f4f6").pack(side="left", padx=(4, 0))
         Checkbutton(header, text="启用", variable=variable, command=command, bg="#f3f4f6", activebackground="#f3f4f6").pack(side="left", padx=(8, 0))
         Label(header, textvariable=self.parameter_summary_vars[panel_key], fg="#667085", bg="#f3f4f6", font=("Microsoft YaHei UI", 9), anchor="w").pack(side="left", fill="x", expand=True, padx=(10, 0))
-        body = Frame(panel)
+        body = Frame(panel, bg="#f3f4f6")
         self.parameter_panels[panel_key] = panel
         self.parameter_panel_bodies[panel_key] = body
         if self.parameter_panel_expanded.get(panel_key, False):
