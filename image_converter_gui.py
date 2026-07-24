@@ -5,6 +5,7 @@ import queue
 import re
 import io
 import json
+import shutil
 import threading
 import time
 from dataclasses import dataclass
@@ -50,7 +51,11 @@ except Exception:
 SUPPORTED_INPUTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif"}
 SKIP_DIR_NAMES = {"渐进式JPG", "AI_language_check_contact_sheets", "AI_language_text_check_sheets", "AI_language_category_sheets"}
 LEGACY_PRESETS_FILE = Path(__file__).with_name("image_converter_presets.json")
-PRESETS_FILE = Path(os.getenv("APPDATA") or Path.home()) / "图片格式转换工具" / "image_converter_presets.json"
+APP_NAME = "牛马图"
+OLD_APP_NAME = "图片格式转换工具"
+APPDATA_ROOT = Path(os.getenv("APPDATA") or Path.home())
+OLD_APP_PRESETS_FILE = APPDATA_ROOT / OLD_APP_NAME / "image_converter_presets.json"
+PRESETS_FILE = APPDATA_ROOT / APP_NAME / "image_converter_presets.json"
 INVALID_FILENAME_CHARS = r'<>:"/\|?*'
 APP_VERSION = "v1.4.6"
 DEFAULT_PRESETS = {
@@ -170,7 +175,7 @@ class ProcessingStep:
 class ImageConverterApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
-        self.root.title(f"图片格式转换工具 {APP_VERSION}")
+        self.root.title(f"{APP_NAME} {APP_VERSION}")
         self.default_window_size = (1900, 1040)
         self.root.minsize(1500, 820)
 
@@ -363,8 +368,9 @@ class ImageConverterApp:
         self.root.geometry(f"{width}x{height}+{x}+{y}")
 
     def _load_presets(self) -> None:
+        self._migrate_app_presets()
         self.presets = {name: values.copy() for name, values in DEFAULT_PRESETS.items()}
-        for path in (LEGACY_PRESETS_FILE, PRESETS_FILE):
+        for path in (LEGACY_PRESETS_FILE, OLD_APP_PRESETS_FILE, PRESETS_FILE):
             if not path.exists():
                 continue
             try:
@@ -375,6 +381,15 @@ class ImageConverterApp:
                 for name, values in loaded.items():
                     if isinstance(name, str) and isinstance(values, dict):
                         self.presets[name] = values
+
+    def _migrate_app_presets(self) -> None:
+        if PRESETS_FILE.exists() or not OLD_APP_PRESETS_FILE.exists():
+            return
+        try:
+            PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(OLD_APP_PRESETS_FILE, PRESETS_FILE)
+        except Exception:
+            pass
 
     def _preset_names(self) -> list[str]:
         return ["自定义", *sorted(self.presets.keys())]
@@ -714,9 +729,7 @@ class ImageConverterApp:
         self.alpha_label.pack(side="left")
         self.alpha_entry = Entry(base_row2, textvariable=self.alpha_bg, width=10)
         self.alpha_entry.pack(side="left", padx=(6, 0))
-        self.preserve_structure_check = Checkbutton(base_row2, text="保留目录结构", variable=self.preserve_structure, command=self.scan_jobs)
-        self.preserve_structure_check.pack(side="left", padx=(18, 0))
-        self.format_controls.extend([self.progressive_check, self.alpha_label, self.alpha_entry, self.preserve_structure_check])
+        self.format_controls.extend([self.progressive_check, self.alpha_label, self.alpha_entry])
 
         _size_panel, size_compress_box = self._make_collapsible_panel(self.parameter_inner, "尺寸与压缩", self.size_compress_enabled, self._on_size_compress_toggle, "size")
         self.resize_controls: list[object] = []
@@ -888,6 +901,26 @@ class ImageConverterApp:
             self.watermark_outline_check, self.watermark_shadow_check,
         ])
         self.watermark_logo_controls.append(self.watermark_logo_button)
+
+        output_strategy_box = LabelFrame(self.parameter_inner, text="输出策略", font=section_font, bd=0, relief="flat", bg=panel_bg)
+        output_strategy_box.pack(fill="x", pady=(6, 0))
+        output_strategy_row = Frame(output_strategy_box, bg=panel_bg)
+        output_strategy_row.pack(fill="x", padx=8, pady=5)
+        self.preserve_structure_check = Checkbutton(
+            output_strategy_row,
+            text="保留目录结构",
+            variable=self.preserve_structure,
+            command=lambda: (self.scan_jobs(), self._update_workflow_summary()),
+            bg=panel_bg,
+            activebackground=panel_bg,
+        )
+        self.preserve_structure_check.pack(side="left")
+        Label(
+            output_strategy_row,
+            text="关闭后同名输出会自动加父级名，仍重复再编号。",
+            fg="#667085",
+            bg=panel_bg,
+        ).pack(side="left", padx=(12, 0))
 
         danger_box = LabelFrame(self.parameter_inner, text="危险操作", font=section_font, bd=0, relief="flat", bg=panel_bg)
         danger_box.pack(fill="x", pady=(6, 0))
@@ -1497,8 +1530,6 @@ class ImageConverterApp:
         if self.output_format.get() == "jpg":
             bg = self.alpha_bg.get().strip().lower()
             bits.append("白底" if bg in {"#fff", "#ffffff", "white"} else f"背景 {self.alpha_bg.get()}")
-        if self.preserve_structure.get():
-            bits.append("保留目录")
         return " · ".join(bits)
 
     def _size_module_summary(self) -> str:
@@ -1861,6 +1892,7 @@ class ImageConverterApp:
             self.jobs.append(ConvertJob(src, target, selected=selected))
             visible_index += 1
         self._auto_resolve_same_stem_extension_conflicts()
+        self._auto_resolve_flat_output_conflicts()
         self.target_conflict_error = self._selected_target_error()
         self._populate_tree()
         self._populate_grid()
@@ -1963,6 +1995,27 @@ class ImageConverterApp:
         target_parents = {str(job.target.parent.resolve()).lower() for job in jobs}
         suffixes = [job.source.suffix.lower().lstrip(".") for job in jobs]
         return len(source_stems) == 1 and len(source_parents) == 1 and len(target_parents) == 1 and len(set(suffixes)) == len(suffixes)
+
+    def _auto_resolve_flat_output_conflicts(self) -> None:
+        if self.preserve_structure.get():
+            return
+        original_groups: dict[str, list[ConvertJob]] = {}
+        for job in self.jobs:
+            original_groups.setdefault(self._target_key(job.target), []).append(job)
+        conflict_keys = {key for key, group in original_groups.items() if len(group) > 1}
+        used: set[str] = set()
+        for job in self.jobs:
+            base_target = job.target
+            if self._target_key(job.target) in conflict_keys:
+                parent_prefix = self._sanitize_stem(job.source.parent.name) or "folder"
+                base_target = job.target.with_name(f"{parent_prefix}_{job.target.stem}{job.target.suffix}")
+            target = base_target
+            counter = 2
+            while self._target_key(target) in used:
+                target = base_target.with_name(f"{base_target.stem}_{counter:03d}{base_target.suffix}")
+                counter += 1
+            job.target = target
+            used.add(self._target_key(job.target))
 
     @staticmethod
     def _target_key(target: Path) -> str:

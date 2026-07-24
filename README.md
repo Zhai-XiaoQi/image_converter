@@ -1,12 +1,12 @@
-# 图片格式转换工具 1.4.6
+# 牛马图 1.4.6
 
-![图片格式转换工具界面预览](assets/readme-cover.png)
+![牛马图界面预览](assets/readme-cover.png)
 
 一个面向素材处理场景的 Windows 桌面工具，支持批量图片格式转换、Amazon 尺寸预设、HEIC 输入转换、智能压缩、批量重命名、基础水印、目录树勾选预览、单图裁剪编辑，以及 EXE 打包分享。
 
 ## 界面预览
 
-![图片格式转换工具界面截图](assets/readme-v1.4.3-interface.png)
+![牛马图界面截图](assets/readme-v1.4.3-interface.png)
 
 ## 主要功能
 
@@ -23,11 +23,15 @@
 - 模糊搜索：按文件名或相对路径搜索图片。
 - 目录树选择：左侧勾选什么，右侧预览就显示什么。
 - 保留目录结构：转换后可保持原始文件夹层级。
+- 扁平输出去重：不保留目录结构时，同名结果会自动加父级名，仍重复则追加编号。
 - 单图处理：裁剪、缩放、旋转、比例预设、吸附、撤销/重做、保存副本。
 - 打包发布：可用 PyInstaller 打包成 EXE，分享给没有 Python 环境的用户。
 
 ## 1.4.6 更新
 
+- 工具更名为“牛马图”，保持 v1.4.6 版本号，并迁移旧本地预设。
+- “保留目录结构”移动到全局输出策略，不再归属于格式转换模块。
+- 不保留目录结构时，同名输出自动加父级名并按需编号，减少批处理被目标冲突拦截。
 - 批量页升级为真正的自动化工作流：用 `WorkflowModule` 驱动右侧流程卡片，用 `ProcessingStep` 驱动执行进度。
 - 当前处理流程只显示已启用模块，并按固定顺序展示：格式与输出、尺寸与压缩、批量重命名、批量水印。
 - 流程卡片支持点击后展开对应参数模块，参数模块标题实时显示当前摘要，避免静态说明和实际设置不一致。
@@ -150,14 +154,16 @@ python -m pip install pillow-heif
 推荐双击：
 
 ```text
-启动图片格式转换工具_无黑窗.vbs
+启动牛马图_无黑窗.vbs
 ```
 
 备用入口：
 
 ```text
-启动图片格式转换工具.bat
+启动牛马图.bat
 ```
+
+旧版 `启动图片格式转换工具_无黑窗.vbs` 和 `启动图片格式转换工具.bat` 仍保留兼容已有快捷方式。
 
 如果直接运行 Python：
 
@@ -170,19 +176,19 @@ python image_converter_gui.py
 项目已验证可用 PyInstaller 打包：
 
 ```powershell
-python -m PyInstaller --noconsole --name 图片格式转换工具 --distpath dist --workpath build --specpath . image_converter_gui.py
+python -m PyInstaller --noconsole --name 牛马图 --distpath dist --workpath build --specpath . image_converter_gui.py
 ```
 
 打包后会生成：
 
 ```text
 dist/
-└─ 图片格式转换工具/
-   ├─ 图片格式转换工具.exe
+└─ 牛马图/
+   ├─ 牛马图.exe
    └─ _internal/
 ```
 
-分享给别人时，请发送整个 `图片格式转换工具` 文件夹，或压缩成 zip 后发送。不要只单独发送 `.exe`，因为 `_internal` 是运行依赖。
+分享给别人时，请发送整个 `牛马图` 文件夹，或压缩成 zip 后发送。不要只单独发送 `.exe`，因为 `_internal` 是运行依赖。
 
 ## 注意事项
 
