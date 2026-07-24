@@ -243,6 +243,18 @@ class ImageConverterApp:
         self.workflow_seen_module_ids: set[str] = set()
         self.workflow_typing_limits: dict[str, int] = {}
         self.workflow_typing_after_id: str | None = None
+        self.workflow_terminal_running = False
+        self.workflow_run_state: dict[str, object] = {
+            "job_index": 0,
+            "job_total": 0,
+            "current_file": "-",
+            "pipeline": "-",
+            "step": "-",
+            "percent": 0,
+            "ok": 0,
+            "failed": 0,
+            "skipped": 0,
+        }
         self.grid_status_refresh_after_id: str | None = None
         self.task_ui_after_id: str | None = None
         self.last_task_ui_update = 0.0
@@ -1543,6 +1555,9 @@ class ImageConverterApp:
             child.destroy()
         self.workflow_cards.clear()
         self.workflow_cursor_label = None
+        if self.workflow_terminal_running:
+            self._render_workflow_running_terminal()
+            return
         modules = [module for module in self._workflow_modules() if module.enabled]
         module_ids = {module.id for module in modules}
         first_workflow_render = bool(modules) and not self.workflow_seen_module_ids and not self.workflow_typing_limits
@@ -1588,6 +1603,30 @@ class ImageConverterApp:
             self.workflow_cards[module.id] = row
         self._pack_workflow_cursor()
         self._schedule_workflow_typing(modules)
+
+    def _render_workflow_running_terminal(self) -> None:
+        state = self.workflow_run_state
+        percent = int(state.get("percent", 0) or 0)
+        lines = [
+            ("job: ", f"{int(state.get('job_index', 0) or 0):02d} / {int(state.get('job_total', 0) or 0):02d}"),
+            ("current: ", str(state.get("current_file", "-") or "-")),
+            ("pipeline: ", str(state.get("pipeline", "-") or "-")),
+            ("step: ", str(state.get("step", "-") or "-")),
+            ("progress: ", f"{percent:3d}% [{self._terminal_progress_bar(percent)}]"),
+            ("result: ", f"success={int(state.get('ok', 0) or 0)} / failed={int(state.get('failed', 0) or 0)} / skipped={int(state.get('skipped', 0) or 0)}"),
+        ]
+        value_colors = ["#38bdf8", "#e5e7eb", "#c4b5fd", "#facc15", "#22c55e", "#93c5fd"]
+        for index, (key, value) in enumerate(lines):
+            row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg="#050505", padx=6, pady=0)
+            row.pack(fill="x")
+            self._terminal_label(row, key, "#94a3b8", bold=True)
+            self._terminal_label(row, value, value_colors[index], bold=index in {0, 3, 4})
+
+    @staticmethod
+    def _terminal_progress_bar(percent: int) -> str:
+        percent = max(0, min(100, int(percent)))
+        filled = int(round(percent / 5))
+        return "#" * filled + "-" * (20 - filled)
 
     def _terminal_label(self, parent: Frame, text: str, fg: str, bold: bool = False) -> Label:
         label = Label(
@@ -1796,6 +1835,8 @@ class ImageConverterApp:
         for job in self.jobs:
             self.selection_state[self._source_key(job.source)] = job.selected
         self.jobs.clear()
+        if not (self.worker and self.worker.is_alive()):
+            self.workflow_terminal_running = False
         self._clear_preview()
         if not self.input_paths:
             self.target_conflict_error = ""
@@ -2577,6 +2618,12 @@ class ImageConverterApp:
         steps.append(ProcessingStep("complete", "完成", "format"))
         return steps
 
+    def _terminal_step_id(self, step: ProcessingStep, job: ConvertJob | None = None) -> str:
+        if step.id == "encode_save":
+            out_format = self._effective_output_format(job.source) if job is not None else self.output_format.get()
+            return f"encode_{out_format}"
+        return step.id
+
     def _emit_processing_step(
         self,
         job: ConvertJob,
@@ -2584,6 +2631,11 @@ class ImageConverterApp:
         current_index: int,
         completed_steps: int,
         total_steps: int,
+        job_index: int = 0,
+        job_total: int = 0,
+        ok: int = 0,
+        failed: int = 0,
+        skipped: int = 0,
         status: str = "running",
         error: str = "",
         force: bool = False,
@@ -2604,6 +2656,13 @@ class ImageConverterApp:
                 "current_index": current_index,
                 "completed_steps": completed_steps,
                 "total_steps": max(1, total_steps),
+                "job_index": job_index,
+                "job_total": job_total,
+                "pipeline": " -> ".join(self._terminal_step_id(step, job) for step in steps),
+                "step_id": self._terminal_step_id(steps[current_index], job) if steps and 0 <= current_index < len(steps) else "-",
+                "ok": ok,
+                "failed": failed,
+                "skipped": skipped,
                 "status": status,
                 "error": error,
             },
@@ -2642,6 +2701,18 @@ class ImageConverterApp:
         self.progress.config(value=0, maximum=max(1, total_steps))
         self._set_task_status("-", "等待开始转换", "0%")
         self._set_workflow_cursor_status("running 0%")
+        self.workflow_terminal_running = True
+        self.workflow_run_state.update({
+            "job_index": 0,
+            "job_total": len(selected_jobs),
+            "current_file": "-",
+            "pipeline": "-",
+            "step": "-",
+            "percent": 0,
+            "ok": 0,
+            "failed": 0,
+            "skipped": 0,
+        })
         self._reset_workflow_run_state()
         self._set_status_message("开始转换...")
         self.start_button.config(state="disabled", text="转换中 0%")
@@ -2709,13 +2780,13 @@ class ImageConverterApp:
                     if step.id == step_id:
                         step_index = found_index
                         break
-                self._emit_processing_step(job, steps, step_index, completed_steps, total_steps, force=force)
+                self._emit_processing_step(job, steps, step_index, completed_steps, total_steps, index, len(selected_jobs), ok, failed, skipped, force=force)
 
             def finish_step(step_id: str) -> None:
                 nonlocal completed_steps
                 emit(step_id, force=True)
                 completed_steps += 1
-                self._emit_processing_step(job, steps, step_index, completed_steps, total_steps, force=True)
+                self._emit_processing_step(job, steps, step_index, completed_steps, total_steps, index, len(selected_jobs), ok, failed, skipped, force=True)
 
             try:
                 if job.target.exists() and not self.overwrite.get():
@@ -2723,7 +2794,7 @@ class ImageConverterApp:
                     completed_steps += len(steps)
                     job.status = "skipped"
                     job.message = "目标文件已存在，未启用覆盖。"
-                    self._emit_processing_step(job, steps, len(steps) - 1, completed_steps, total_steps, force=True)
+                    self._emit_processing_step(job, steps, len(steps) - 1, completed_steps, total_steps, index, len(selected_jobs), ok, failed, skipped, force=True)
                     report.append(f"[SKIP] {job.source} -> {job.target} (target exists)")
                 else:
                     before_size = job.source.stat().st_size if job.source.exists() else 0
@@ -2746,7 +2817,7 @@ class ImageConverterApp:
                 completed_steps += max(0, len(steps) - sum(1 for _step in steps[: step_index + 1]))
                 job.status = "failed"
                 job.message = str(exc)
-                self._emit_processing_step(job, steps, step_index, completed_steps, total_steps, status="failed", error=str(exc), force=True)
+                self._emit_processing_step(job, steps, step_index, completed_steps, total_steps, index, len(selected_jobs), ok, failed, skipped, status="failed", error=str(exc), force=True)
                 message = f"{job.source} -> {job.target} ({exc})"
                 failures.append(message)
                 report.append(f"[FAIL] {message}")
@@ -3255,6 +3326,19 @@ class ImageConverterApp:
         current_file = str(payload.get("file", "-"))
         current_step = steps[current_index].name if steps and 0 <= current_index < len(steps) else "-"
         percent = int(completed_steps * 100 / max(1, total_steps))
+        self.workflow_terminal_running = True
+        self.workflow_run_state.update({
+            "job_index": int(payload.get("job_index", 0) or 0),
+            "job_total": int(payload.get("job_total", 0) or 0),
+            "current_file": current_file,
+            "pipeline": str(payload.get("pipeline", "-") or "-"),
+            "step": str(payload.get("step_id", "-") or "-"),
+            "percent": percent,
+            "ok": int(payload.get("ok", 0) or 0),
+            "failed": int(payload.get("failed", 0) or 0),
+            "skipped": int(payload.get("skipped", 0) or 0),
+        })
+        self._schedule_workflow_render()
         if steps and 0 <= current_index < len(steps):
             new_active = steps[current_index].module_id
             self._sync_workflow_module_status(steps, current_index, status, error, percent)
@@ -3352,6 +3436,15 @@ class ImageConverterApp:
                     completed_steps, total_steps, index, total, ok, failed, skipped = payload  # type: ignore[misc]
                     self.progress.config(value=completed_steps, maximum=max(1, total_steps))
                     percent = int(completed_steps * 100 / max(1, total_steps))
+                    self.workflow_run_state.update({
+                        "job_index": int(index),
+                        "job_total": int(total),
+                        "percent": percent,
+                        "ok": int(ok),
+                        "failed": int(failed),
+                        "skipped": int(skipped),
+                    })
+                    self._schedule_workflow_render()
                     self._set_workflow_cursor_status(f"running {percent}%")
                     self.start_button.config(state="disabled", text=f"转换中 {percent}%")
                     self._set_status_parts([
@@ -3373,6 +3466,14 @@ class ImageConverterApp:
                     ])
                     self._set_task_status("-", "✓ 本次任务已完成", "100%")
                     self._set_workflow_cursor_status("done 100%")
+                    self.workflow_run_state.update({
+                        "job_index": int(selected),
+                        "job_total": int(selected),
+                        "percent": 100,
+                        "ok": int(ok),
+                        "failed": int(failed),
+                        "skipped": int(skipped),
+                    })
                     for module in self._workflow_modules():
                         if module.enabled and module.id not in self.workflow_module_error:
                             self.workflow_module_status[module.id] = "done"
