@@ -528,7 +528,7 @@ class ImageConverterApp:
         style.configure("File.Treeview", font=("Microsoft YaHei UI", 11), rowheight=28)
         style.configure("File.Treeview.Heading", font=module_font)
         style.configure("TNotebook.Tab", font=("Microsoft YaHei UI", 12, "bold"), padding=(18, 8))
-        style.configure("Workflow.Horizontal.TProgressbar", thickness=7)
+        style.configure("Workflow.Horizontal.TProgressbar", thickness=4)
         style.map("File.Treeview", background=[("selected", "#dcecff")])
         panel_bg = "#f3f4f6"
 
@@ -2401,6 +2401,9 @@ class ImageConverterApp:
     def _on_tree_click(self, event) -> str | None:
         item = self.tree.identify_row(event.y)
         if not item:
+            return None
+        element = self.tree.identify("element", event.x, event.y)
+        if "indicator" in str(element).lower():
             return None
         node = self.tree_nodes.get(item)
         if not node:
