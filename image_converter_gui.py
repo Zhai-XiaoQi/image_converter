@@ -612,7 +612,7 @@ class ImageConverterApp:
         self.grid_inner.bind("<MouseWheel>", self._on_grid_mousewheel)
         panes.add(grid_outer, minsize=620)
 
-        workflow_box = LabelFrame(opts, text="当前处理流程", font=section_font)
+        workflow_box = LabelFrame(opts, text="当前处理流程", font=section_font, bd=0, relief="flat")
         workflow_box.pack(fill="x", pady=(0, 6))
         workflow_list = Frame(workflow_box, height=82)
         workflow_list.pack(fill="x", padx=8, pady=(5, 1))
@@ -638,7 +638,7 @@ class ImageConverterApp:
             font=("Microsoft YaHei UI", 9, "bold"),
         ).pack(fill="x", padx=10, pady=(2, 5))
 
-        preset_box = LabelFrame(opts, text="处理预设", font=section_font)
+        preset_box = LabelFrame(opts, text="处理预设", font=section_font, bd=0, relief="flat")
         preset_box.pack(fill="x", pady=(0, 6))
         preset_row = Frame(preset_box)
         preset_row.pack(fill="x", padx=10, pady=7)
@@ -649,13 +649,13 @@ class ImageConverterApp:
         Button(preset_row, text="另存为", command=self.save_preset_as, width=7).pack(side="left", padx=(6, 0))
         Label(preset_box, textvariable=self.preset_summary, fg="#0b5cad", anchor="w", wraplength=500).pack(fill="x", padx=10, pady=(0, 7))
 
-        parameter_box = LabelFrame(opts, text="参数配置", font=section_font)
+        parameter_box = LabelFrame(opts, text="参数配置", font=section_font, bd=0, relief="flat")
         parameter_box.pack(fill="both", expand=True, pady=(0, 6))
         parameter_canvas = Canvas(parameter_box, highlightthickness=0)
         self.parameter_canvas = parameter_canvas
         parameter_scroll = Scrollbar(parameter_box, orient="vertical", command=parameter_canvas.yview)
         parameter_canvas.config(yscrollcommand=parameter_scroll.set)
-        parameter_canvas.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
+        parameter_canvas.pack(side="left", fill="both", expand=True, padx=(0, 0), pady=6)
         parameter_scroll.pack(side="right", fill="y", pady=6)
         self.parameter_inner = Frame(parameter_canvas)
         self.parameter_window = parameter_canvas.create_window((0, 0), window=self.parameter_inner, anchor="nw")
@@ -856,7 +856,7 @@ class ImageConverterApp:
         ])
         self.watermark_logo_controls.append(self.watermark_logo_button)
 
-        danger_box = LabelFrame(self.parameter_inner, text="危险操作", font=section_font)
+        danger_box = LabelFrame(self.parameter_inner, text="危险操作", font=section_font, bd=0, relief="flat")
         danger_box.pack(fill="x", pady=(6, 0))
         danger_row = Frame(danger_box)
         danger_row.pack(fill="x", padx=8, pady=5)
@@ -864,7 +864,20 @@ class ImageConverterApp:
         Checkbutton(danger_row, text="成功后删除原图", variable=self.delete_originals, fg="#b42318", font=("Microsoft YaHei UI", 9, "bold")).pack(side="left", padx=(20, 0))
 
         action_bar = Frame(opts)
-        action_bar.pack(fill="x", pady=(2, 0))
+        action_bar.pack(fill="x", pady=(4, 0))
+        action_bar.grid_columnconfigure(0, weight=1, uniform="batch_actions")
+        action_bar.grid_columnconfigure(1, weight=1, uniform="batch_actions")
+        self.open_result_button = Button(
+            action_bar,
+            text="打开结果",
+            command=self.open_output_dir,
+            bg="#f3f4f6",
+            fg="#111827",
+            activebackground="#e5e7eb",
+            activeforeground="#111827",
+            font=("Microsoft YaHei UI", 11, "bold"),
+        )
+        self.open_result_button.grid(row=0, column=0, sticky="ew", padx=(0, 6), ipady=5)
         self.start_button = Button(
             action_bar,
             text="开始转换",
@@ -873,9 +886,9 @@ class ImageConverterApp:
             fg="white",
             activebackground="#084a8d",
             activeforeground="white",
-            font=("Microsoft YaHei UI", 12, "bold"),
+            font=("Microsoft YaHei UI", 11, "bold"),
         )
-        self.start_button.pack(fill="x", ipady=9)
+        self.start_button.grid(row=0, column=1, sticky="ew", padx=(6, 0), ipady=5)
 
         for var in (self.rename_template, self.rename_prefix, self.rename_suffix, self.rename_find, self.rename_replace, self.target_size):
             var.trace_add("write", lambda *_args: self._schedule_scan())
@@ -916,8 +929,8 @@ class ImageConverterApp:
         self._bind_shortcuts()
 
     def _make_collapsible_panel(self, parent: Frame, text: str, variable: BooleanVar, command, panel_key: str) -> tuple[Frame, Frame]:
-        panel = Frame(parent, bd=1, relief="groove", bg="#f3f4f6")
-        panel.pack(fill="x", pady=6)
+        panel = Frame(parent, bd=0, relief="flat", bg="#f3f4f6")
+        panel.pack(fill="x", pady=(0, 8))
         header = Frame(panel, bg="#f3f4f6")
         header.pack(fill="x", padx=8, pady=5)
         self.parameter_toggle_buttons[panel_key] = Button(
