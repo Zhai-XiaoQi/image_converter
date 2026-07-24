@@ -648,10 +648,10 @@ class ImageConverterApp:
 
         workflow_box = LabelFrame(opts, text="当前处理流程", font=section_font, bd=0, relief="flat", bg=panel_bg)
         workflow_box.pack(fill="x", pady=(0, 6))
-        workflow_list = Frame(workflow_box, height=96, bg=panel_bg)
+        workflow_list = Frame(workflow_box, height=128, bg=panel_bg)
         workflow_list.pack(fill="x", padx=8, pady=(5, 1))
         workflow_list.pack_propagate(False)
-        self.workflow_canvas = Canvas(workflow_list, highlightthickness=0, height=92, bg="#050505")
+        self.workflow_canvas = Canvas(workflow_list, highlightthickness=0, height=124, bg="#050505")
         workflow_scroll = Scrollbar(workflow_list, orient="vertical", command=self.workflow_canvas.yview)
         self.workflow_canvas.config(yscrollcommand=workflow_scroll.set)
         self.workflow_canvas.pack(side="left", fill="both", expand=True)
@@ -663,7 +663,6 @@ class ImageConverterApp:
         self.workflow_canvas.bind("<MouseWheel>", self._on_workflow_mousewheel)
         self.workflow_cards_frame.bind("<MouseWheel>", self._on_workflow_mousewheel)
         self.workflow_progress = ttk.Progressbar(workflow_box, mode="determinate", style="Workflow.Horizontal.TProgressbar")
-        self.workflow_progress.pack(fill="x", padx=(8, 24), pady=(1, 0))
         Label(
             workflow_box,
             textvariable=self.workflow_stats_text,
@@ -911,6 +910,7 @@ class ImageConverterApp:
             activeforeground="white",
             relief="flat",
             bd=0,
+            disabledforeground="white",
             font=("Microsoft YaHei UI", 11, "bold"),
         )
         self.start_button.grid(row=0, column=0, sticky="ew", padx=(0, 6), ipady=5)
@@ -1610,12 +1610,11 @@ class ImageConverterApp:
         lines = [
             ("job: ", f"{int(state.get('job_index', 0) or 0):02d} / {int(state.get('job_total', 0) or 0):02d}"),
             ("current: ", str(state.get("current_file", "-") or "-")),
-            ("pipeline: ", str(state.get("pipeline", "-") or "-")),
             ("step: ", str(state.get("step", "-") or "-")),
             ("progress: ", f"{percent:3d}% [{self._terminal_progress_bar(percent)}]"),
             ("result: ", f"success={int(state.get('ok', 0) or 0)} / failed={int(state.get('failed', 0) or 0)} / skipped={int(state.get('skipped', 0) or 0)}"),
         ]
-        value_colors = ["#38bdf8", "#e5e7eb", "#c4b5fd", "#facc15", "#22c55e", "#93c5fd"]
+        value_colors = ["#38bdf8", "#e5e7eb", "#facc15", "#22c55e", "#93c5fd"]
         for index, (key, value) in enumerate(lines):
             row = Frame(self.workflow_cards_frame, bd=0, relief="flat", bg="#050505", padx=6, pady=0)
             row.pack(fill="x")
@@ -1634,7 +1633,7 @@ class ImageConverterApp:
             text=text,
             fg=fg,
             bg="#050505",
-            font=("Consolas", 7, "bold" if bold else "normal"),
+            font=("Consolas", 8, "bold" if bold else "normal"),
             anchor="w",
         )
         label.pack(side="left")
@@ -2715,7 +2714,7 @@ class ImageConverterApp:
         })
         self._reset_workflow_run_state()
         self._set_status_message("开始转换...")
-        self.start_button.config(state="disabled", text="转换中 0%")
+        self.start_button.config(state="disabled", text="转换中 0%", fg="white", disabledforeground="white")
         self.worker = threading.Thread(target=self._convert_worker, args=(selected_jobs,), daemon=True)
         self.worker.start()
 
@@ -3446,7 +3445,7 @@ class ImageConverterApp:
                     })
                     self._schedule_workflow_render()
                     self._set_workflow_cursor_status(f"running {percent}%")
-                    self.start_button.config(state="disabled", text=f"转换中 {percent}%")
+                    self.start_button.config(state="disabled", text=f"转换中 {percent}%", fg="white", disabledforeground="white")
                     self._set_status_parts([
                         ("处理中 ", False), (f"{index}/{total}", True),
                         ("，成功 ", False), (str(ok), True),
